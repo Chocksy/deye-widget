@@ -1,0 +1,9 @@
+# Swift Package Manager build output
+.build/
+
+# macOS
+.DS_Store
+
+# Images (scratch); the committed screenshot is whitelisted below
+*.png
+!docs/screenshot.png
