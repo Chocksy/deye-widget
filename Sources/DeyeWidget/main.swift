@@ -38,6 +38,7 @@ func runDump() -> Int32 {
         print(String(format: "Grid CT             %d W", d.gridCTPower))
         print(String(format: "Load                %d W", d.loadPower))
         print(String(format: "Grid voltage        %.1f V", d.gridVoltage))
+        print(String(format: "Grid frequency      %.2f Hz", d.gridFrequency))
         print(String(format: "Inverter temp       %.1f °C", d.inverterTemp))
         print("")
         print(String(format: "Day PV              %.1f kWh", d.dayPV))

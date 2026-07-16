@@ -15,6 +15,7 @@ struct InverterData: Equatable {
     var gridCTPower: Int = 0           // W
     var loadPower: Int = 0             // W
     var gridVoltage: Double = 0        // V
+    var gridFrequency: Double = 0      // Hz
     var inverterTemp: Double = 0       // °C
 
     // Today's energy totals (kWh).
@@ -68,6 +69,7 @@ enum InverterDecoder {
         d.gridCTPower = s16(b(172))
         d.loadPower = s16(b(178))
         d.gridVoltage = Double(b(150)) / 10.0
+        d.gridFrequency = Double(a(79)) / 100.0   // grid frequency, reg 79 (60-109 block)
         d.inverterTemp = (Double(b(182)) - 1000.0) / 10.0
 
         d.dayBatteryCharge = Double(a(70)) / 10.0

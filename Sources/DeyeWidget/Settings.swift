@@ -22,6 +22,23 @@ enum SizePreset: String, CaseIterable {
     }
 }
 
+/// Widget display mode. Flow is the compact 440-wide graph; Flow + Chart adds
+/// the Power Profile pane; Dashboard shows big-number cards. Chart and Dashboard
+/// are both 770 wide.
+enum DisplayMode: String, CaseIterable {
+    case flow, flowChart, dashboard
+
+    var title: String {
+        switch self {
+        case .flow: return "Flow"
+        case .flowChart: return "Flow + Chart"
+        case .dashboard: return "Dashboard"
+        }
+    }
+
+    var isWide: Bool { self != .flow }
+}
+
 /// UserDefaults-backed configuration with hardcoded fallbacks matching the
 /// verified live logger.
 @MainActor
@@ -37,7 +54,8 @@ final class Settings: ObservableObject {
         static let slaveId = "slaveId"
         static let pollInterval = "pollInterval"
         static let sizePreset = "sizePreset"
-        static let showChart = "showChart"
+        static let showChart = "showChart"      // legacy (migrated to displayMode)
+        static let displayMode = "displayMode"
     }
 
     @Published var host: String {
@@ -58,8 +76,8 @@ final class Settings: ObservableObject {
     @Published var sizePreset: SizePreset {
         didSet { defaults.set(sizePreset.rawValue, forKey: Keys.sizePreset) }
     }
-    @Published var showChart: Bool {
-        didSet { defaults.set(showChart, forKey: Keys.showChart) }
+    @Published var displayMode: DisplayMode {
+        didSet { defaults.set(displayMode.rawValue, forKey: Keys.displayMode) }
     }
 
     /// Whether the logger connection is configured. Until the user sets a host
@@ -84,7 +102,14 @@ final class Settings: ObservableObject {
         let pi = defaults.double(forKey: Keys.pollInterval)
         pollInterval = pi > 0 ? pi : 5.0
         sizePreset = (defaults.string(forKey: Keys.sizePreset)).flatMap { SizePreset(rawValue: $0) } ?? .medium
-        showChart = (defaults.object(forKey: Keys.showChart) as? Bool) ?? true
+        // Migrate the old boolean showChart into the new three-way displayMode.
+        if let raw = defaults.string(forKey: Keys.displayMode), let m = DisplayMode(rawValue: raw) {
+            displayMode = m
+        } else if let legacy = defaults.object(forKey: Keys.showChart) as? Bool {
+            displayMode = legacy ? .flowChart : .flow
+        } else {
+            displayMode = .flowChart
+        }
     }
 
     /// One-time copy of settings from the legacy "DeyeWidget" defaults domain
@@ -103,6 +128,7 @@ final class Settings: ObservableObject {
         let sl = legacy.integer(forKey: Keys.slaveId); if sl > 0 { std.set(sl, forKey: Keys.slaveId) }
         let pi = legacy.double(forKey: Keys.pollInterval); if pi > 0 { std.set(pi, forKey: Keys.pollInterval) }
         if let sp = legacy.string(forKey: Keys.sizePreset) { std.set(sp, forKey: Keys.sizePreset) }
+        if let dm = legacy.string(forKey: Keys.displayMode) { std.set(dm, forKey: Keys.displayMode) }
         if let show = legacy.object(forKey: Keys.showChart) as? Bool { std.set(show, forKey: Keys.showChart) }
     }
 }

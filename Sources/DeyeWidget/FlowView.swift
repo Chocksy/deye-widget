@@ -51,13 +51,13 @@ private struct Node {
 struct FlowView: View {
     @ObservedObject var poller: DataPoller
     @ObservedObject var settings: Settings
-    /// When true, extend the widget to the right with the Power Profile chart.
-    var showChart: Bool = true
+    /// Which display mode to render.
+    var displayMode: DisplayMode = .flowChart
     /// Uniform size multiplier. All point sizes are parameterized (not
     /// rasterized via scaleEffect) so text stays crisp at every preset.
     var scale: CGFloat = 1.0
 
-    // Base design: 440x400 flow, +330 wide chart pane when shown.
+    // Base design: 440x400 flow, +330 wide chart/dashboard pane when wide.
     static let flowWidth: CGFloat = 440
     static let chartWidth: CGFloat = 330
     static let baseHeight: CGFloat = 400
@@ -69,8 +69,8 @@ struct FlowView: View {
     private func sc(_ v: CGFloat) -> CGFloat { v * scale }
 
     /// Total content size for the current configuration.
-    static func contentSize(showChart: Bool, scale: CGFloat) -> CGSize {
-        let w = (showChart ? flowWidth + chartWidth : flowWidth) * scale
+    static func contentSize(displayMode: DisplayMode, scale: CGFloat) -> CGSize {
+        let w = (displayMode.isWide ? flowWidth + chartWidth : flowWidth) * scale
         return CGSize(width: w, height: baseHeight * scale)
     }
 
@@ -83,7 +83,10 @@ struct FlowView: View {
             )
             .ignoresSafeArea()
 
-            if showChart {
+            switch displayMode {
+            case .flow:
+                flowColumn.frame(width: sc(Self.flowWidth))
+            case .flowChart:
                 HStack(spacing: 0) {
                     flowColumn
                         .frame(width: sc(Self.flowWidth))
@@ -93,12 +96,12 @@ struct FlowView: View {
                     ChartPane(poller: poller, scale: scale)
                         .frame(width: sc(Self.chartWidth) - 1)
                 }
-            } else {
-                flowColumn.frame(width: sc(Self.flowWidth))
+            case .dashboard:
+                dashboardView
             }
         }
-        .frame(width: Self.contentSize(showChart: showChart, scale: scale).width,
-               height: Self.contentSize(showChart: showChart, scale: scale).height)
+        .frame(width: Self.contentSize(displayMode: displayMode, scale: scale).width,
+               height: Self.contentSize(displayMode: displayMode, scale: scale).height)
         .animation(.spring(duration: 0.6), value: poller.data)
         .animation(.easeInOut(duration: 0.4), value: poller.connected)
     }
@@ -117,6 +120,251 @@ struct FlowView: View {
                 .padding(.bottom, sc(14))
                 .padding(.top, sc(2))
         }
+    }
+
+    // MARK: - Dashboard mode (big-number cards)
+
+    private struct DashCard {
+        let caption: String
+        let icon: String
+        let color: Color
+        let big: String
+        let unit: String
+        let secondary: String
+        let watts: Double   // magnitude, drives connector emphasis + icon glow
+        let dir: FlowDir
+        let active: Bool
+        var bigSize: CGFloat = 27
+    }
+
+    private func bigWatts(_ w: Int) -> (String, String) {
+        let a = abs(w)
+        if a >= 1000 { return (String(format: "%.2f", Double(a) / 1000.0), "kW") }
+        return ("\(a)", "W")
+    }
+
+    private var leftCards: [DashCard] {
+        let d = poller.data
+        let pvW = bigWatts(d.pvTotal), miW = bigWatts(d.miPower), gridW = bigWatts(d.gridPower)
+        let importing = d.gridImporting, exporting = d.gridExporting
+        let charging = d.batteryCharging, discharging = d.batteryDischarging
+        return [
+            DashCard(caption: "SOLAR PV", icon: "sun.max.fill", color: Palette.pv,
+                     big: pvW.0, unit: pvW.1, secondary: String(format: "%.1f kWh today", d.dayPV),
+                     watts: Double(abs(d.pvTotal)), dir: d.pvTotal > 20 ? .toInverter : .none,
+                     active: d.pvTotal > 20),
+            DashCard(caption: "MI · HUAWEI", icon: "sun.horizon.fill", color: Palette.mi,
+                     big: miW.0, unit: miW.1, secondary: "AC-coupled PV",
+                     watts: Double(abs(d.miPower)), dir: d.miPower > 20 ? .toInverter : .none,
+                     active: abs(d.miPower) > 20),
+            DashCard(caption: "GRID", icon: "bolt.horizontal.fill",
+                     color: importing ? Palette.gridImport : (exporting ? Palette.gridExport : Palette.idle),
+                     big: gridW.0, unit: gridW.1,
+                     secondary: String(format: "↓%.1f  ↑%.1f kWh", d.dayGridImport, d.dayGridExport),
+                     watts: Double(abs(d.gridPower)),
+                     dir: importing ? .toInverter : (exporting ? .fromInverter : .none),
+                     active: importing || exporting),
+            DashCard(caption: "BATTERY", icon: batterySymbol(d.soc),
+                     color: charging ? Palette.batteryCharge : (discharging ? Palette.batteryDischarge : Palette.idle),
+                     big: "\(d.soc)", unit: "%",
+                     secondary: String(format: "%d W · %.1f V · %@", abs(d.batteryPower), d.batteryVoltage,
+                                       charging ? "charge" : (discharging ? "discharge" : "idle")),
+                     watts: Double(abs(d.batteryPower)),
+                     dir: discharging ? .toInverter : (charging ? .fromInverter : .none),
+                     active: charging || discharging)
+        ]
+    }
+
+    private var rightCards: [DashCard] {
+        let d = poller.data
+        let houseW = bigWatts(d.loadPower)
+        return [
+            DashCard(caption: "HOUSE", icon: "house.fill", color: Palette.house,
+                     big: houseW.0, unit: houseW.1, secondary: String(format: "%.1f kWh today", d.dayLoad),
+                     watts: Double(abs(d.loadPower)), dir: d.loadPower > 20 ? .fromInverter : .none,
+                     active: d.loadPower > 20, bigSize: 32),
+            DashCard(caption: "EV", icon: "car.fill", color: Palette.ev,
+                     big: "—", unit: "", secondary: "waiting",
+                     watts: 0, dir: .none, active: false, bigSize: 32)
+        ]
+    }
+
+    private var dashboardView: some View {
+        VStack(spacing: 0) {
+            header
+                .padding(.horizontal, sc(18))
+                .padding(.top, sc(14))
+                .padding(.bottom, sc(4))
+            dashboardGrid
+                .padding(.horizontal, sc(14))
+            Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+            dashboardBottomBar
+                .padding(.horizontal, sc(18))
+                .padding(.vertical, sc(9))
+        }
+    }
+
+    private var dashboardGrid: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let colGap = sc(10)
+            let centerW = sc(96)
+            let sideW = (w - centerW - 2 * colGap) / 2
+            let leftCX = sideW / 2
+            let rightCX = w - sideW / 2
+            let center = CGPoint(x: w / 2, y: h / 2)
+
+            let rowGap = sc(8)
+            let cardHL = (h - 3 * rowGap) / 4
+            let leftYs = (0..<4).map { cardHL / 2 + (cardHL + rowGap) * CGFloat($0) }
+            let cardHR = (h - rowGap) / 2
+            let rightYs = (0..<2).map { cardHR / 2 + (cardHR + rowGap) * CGFloat($0) }
+
+            let lc = leftCards
+            let rc = rightCards
+
+            ZStack {
+                TimelineView(.animation) { tl in
+                    Canvas { ctx, _ in
+                        for i in 0..<4 {
+                            let edge = CGPoint(x: leftCX + sideW / 2, y: leftYs[i])
+                            drawDashConnection(ctx: ctx, cardEdge: edge, center: center, card: lc[i], date: tl.date)
+                        }
+                        for i in 0..<2 {
+                            let edge = CGPoint(x: rightCX - sideW / 2, y: rightYs[i])
+                            drawDashConnection(ctx: ctx, cardEdge: edge, center: center, card: rc[i], date: tl.date)
+                        }
+                    }
+                }
+
+                inverterNode.position(center)
+
+                ForEach(0..<4, id: \.self) { i in
+                    dashCardView(lc[i]).frame(width: sideW, height: cardHL).position(x: leftCX, y: leftYs[i])
+                }
+                ForEach(0..<2, id: \.self) { i in
+                    dashCardView(rc[i]).frame(width: sideW, height: cardHR).position(x: rightCX, y: rightYs[i])
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func dashCardView(_ c: DashCard) -> some View {
+        // Icon glow scales with |W| (do NOT resize the card itself).
+        let glow = c.active ? sc(2 + 6 * min(1, c.watts / 3000)) : 0
+        VStack(alignment: .leading, spacing: sc(3)) {
+            HStack(spacing: sc(5)) {
+                Image(systemName: c.icon)
+                    .font(.system(size: sc(12), weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(c.active ? c.color : Color.secondary)
+                    .shadow(color: c.active ? c.color.opacity(0.7) : .clear, radius: glow)
+                Text(c.caption)
+                    .font(.system(size: sc(9), weight: .semibold, design: .rounded))
+                    .tracking(sc(0.8))
+                    .foregroundStyle(.secondary)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: sc(3)) {
+                Text(c.big)
+                    .font(.system(size: sc(c.bigSize), weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                if !c.unit.isEmpty {
+                    Text(c.unit)
+                        .font(.system(size: sc(14), weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text(c.secondary)
+                .font(.system(size: sc(11), weight: .regular, design: .rounded))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .padding(.horizontal, sc(12))
+        .padding(.vertical, sc(8))
+        .background(
+            RoundedRectangle(cornerRadius: sc(16), style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(RoundedRectangle(cornerRadius: sc(16), style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1))
+        )
+        .opacity(c.active ? 1.0 : 0.6)
+    }
+
+    /// Card-edge → inverter connector with dynamic width + dot count/speed.
+    private func drawDashConnection(ctx: GraphicsContext, cardEdge: CGPoint, center: CGPoint,
+                                    card: DashCard, date: Date) {
+        let s = cardEdge
+        let e = edgePoint(from: center, to: cardEdge, radius: invR)
+        let radial = unit(dx: cardEdge.x - center.x, dy: cardEdge.y - center.y)
+        let span = hypot(e.x - s.x, e.y - s.y)
+        let c1 = CGPoint(x: s.x + (e.x - s.x) * 0.5, y: s.y)          // horizontal leave
+        let c2 = CGPoint(x: e.x + radial.dx * span * 0.4,            // radial ease-in
+                         y: e.y + radial.dy * span * 0.4)
+
+        let frac = min(1.0, card.watts / 3000.0)
+        let active = card.active && card.dir != .none
+        let width = active ? (1.5 + 2.5 * frac) : 1.0
+
+        var path = Path()
+        path.move(to: s)
+        path.addCurve(to: e, control1: c1, control2: c2)
+        ctx.stroke(path,
+                   with: .color(active ? card.color.opacity(0.6) : Color.white.opacity(0.08)),
+                   style: StrokeStyle(lineWidth: sc(width), lineCap: .round))
+
+        guard active else { return }
+
+        let dotCount = max(1, Int((1 + 3 * frac).rounded()))
+        let period = 2.5 - 1.6 * frac
+        let r = sc(2.5)
+        let base = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+        for i in 0..<dotCount {
+            let phase = (base + Double(i) / Double(dotCount)).truncatingRemainder(dividingBy: 1.0)
+            let travel = 0.08 + phase * 0.84
+            let u = card.dir == .toInverter ? travel : (1.0 - travel)
+            let pt = cubicPoint(CGFloat(u), s, c1, c2, e)
+            let dot = Path(ellipseIn: CGRect(x: pt.x - r, y: pt.y - r, width: r * 2, height: r * 2))
+            ctx.drawLayer { layer in
+                layer.addFilter(.shadow(color: card.color.opacity(0.9), radius: sc(3)))
+                layer.fill(dot, with: .color(card.color))
+            }
+        }
+    }
+
+    private var dashboardBottomBar: some View {
+        let d = poller.data
+        let freqOK = d.gridFrequency >= 45 && d.gridFrequency <= 65
+        return HStack(spacing: 0) {
+            bottomStat("bolt.fill", Palette.gridImport, "VOLTAGE", String(format: "%.1f V", d.gridVoltage))
+            bottomStat("battery.100", Palette.batteryCharge, "BATTERY", String(format: "%.2f V", d.batteryVoltage))
+            bottomStat("waveform.path", Palette.mi, "FREQUENCY", freqOK ? String(format: "%.1f Hz", d.gridFrequency) : "—")
+            bottomStat("thermometer", Palette.batteryDischarge, "TEMP", String(format: "%.1f °C", d.inverterTemp))
+        }
+    }
+
+    private func bottomStat(_ icon: String, _ tint: Color, _ caption: String, _ value: String) -> some View {
+        HStack(spacing: sc(6)) {
+            Image(systemName: icon)
+                .font(.system(size: sc(11), weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(caption)
+                    .font(.system(size: sc(8), weight: .semibold, design: .rounded))
+                    .foregroundStyle(.tertiary)
+                Text(value)
+                    .font(.system(size: sc(12), weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var anyActive: Bool {
@@ -324,7 +572,7 @@ struct FlowView: View {
         VStack(spacing: sc(2)) {
             if n.socPrimary {
                 Text(n.value)
-                    .font(.system(size: sc(17), weight: .bold, design: .rounded))
+                    .font(.system(size: sc(20), weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .contentTransition(.numericText())
                 if let s = n.secondary {
@@ -339,7 +587,7 @@ struct FlowView: View {
                     .font(.system(size: sc(10), weight: .regular, design: .rounded))
                     .foregroundStyle(.secondary)
                 Text(n.value)
-                    .font(.system(size: sc(13), weight: .semibold, design: .rounded))
+                    .font(.system(size: sc(15), weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .contentTransition(.numericText())
                     .foregroundStyle(n.name == "EV" && !n.active ? Color.secondary : .primary)

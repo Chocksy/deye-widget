@@ -16,7 +16,7 @@ final class StatusBarController {
 
     private var settingsWindow: NSWindow?
     private var sizeItems: [SizePreset: NSMenuItem] = [:]
-    private let showChartItem = NSMenuItem(title: "Show Chart", action: nil, keyEquivalent: "")
+    private var displayItems: [DisplayMode: NSMenuItem] = [:]
 
     // Menu items whose titles we update each poll.
     private let loadItem = NSMenuItem(title: "Load: —", action: nil, keyEquivalent: "")
@@ -54,11 +54,19 @@ final class StatusBarController {
         refresh.target = self
         menu.addItem(refresh)
 
-        // Show Chart toggle.
-        showChartItem.action = #selector(toggleChart)
-        showChartItem.target = self
-        showChartItem.state = settings.showChart ? .on : .off
-        menu.addItem(showChartItem)
+        // Display submenu (Flow / Flow + Chart / Dashboard).
+        let displayItem = NSMenuItem(title: "Display", action: nil, keyEquivalent: "")
+        let displayMenu = NSMenu()
+        for mode in DisplayMode.allCases {
+            let item = NSMenuItem(title: mode.title, action: #selector(selectDisplay(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode.rawValue
+            item.state = (settings.displayMode == mode) ? .on : .off
+            displayMenu.addItem(item)
+            displayItems[mode] = item
+        }
+        displayItem.submenu = displayMenu
+        menu.addItem(displayItem)
 
         // Size submenu.
         let sizeItem = NSMenuItem(title: "Size", action: nil, keyEquivalent: "")
@@ -133,9 +141,13 @@ final class StatusBarController {
         onConfigChange?()
     }
 
-    @objc private func toggleChart() {
-        settings.showChart.toggle()
-        showChartItem.state = settings.showChart ? .on : .off
+    @objc private func selectDisplay(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let mode = DisplayMode(rawValue: raw) else { return }
+        settings.displayMode = mode
+        for (m, item) in displayItems {
+            item.state = (m == mode) ? .on : .off
+        }
         onConfigChange?()
     }
 

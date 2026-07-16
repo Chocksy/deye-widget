@@ -29,7 +29,7 @@ final class WidgetWindow: NSWindow {
         self.settings = settings
         self.hosting = NSHostingView(
             rootView: FlowView(poller: poller, settings: settings,
-                               showChart: settings.showChart, scale: settings.sizePreset.scale)
+                               displayMode: settings.displayMode, scale: settings.sizePreset.scale)
         )
 
         super.init(
@@ -104,11 +104,11 @@ final class WidgetWindow: NSWindow {
     /// 28 pt corner radius stays fixed via the resizable mask.
     func applyConfig() {
         let scale = settings.sizePreset.scale
-        let showChart = settings.showChart
+        let mode = settings.displayMode
         hosting.rootView = FlowView(poller: poller, settings: settings,
-                                    showChart: showChart, scale: scale)
+                                    displayMode: mode, scale: scale)
 
-        let cs = FlowView.contentSize(showChart: showChart, scale: scale)
+        let cs = FlowView.contentSize(displayMode: mode, scale: scale)
         let newSize = NSSize(width: cs.width, height: cs.height)
         let old = frame
         let topLeftY = old.origin.y + old.size.height   // AppKit origin is bottom-left
