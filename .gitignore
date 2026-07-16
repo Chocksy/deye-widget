@@ -8,6 +8,7 @@ DeyeWidget.app/
 # macOS
 .DS_Store
 
-# Images (scratch); the committed screenshot is whitelisted below
+# Images (scratch); committed assets are whitelisted below
 *.png
 !docs/screenshot.png
+!assets/icon-1024.png
