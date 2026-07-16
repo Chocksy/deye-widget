@@ -61,8 +61,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var poller: DataPoller!
     private var window: WidgetWindow!
     private var statusBar: StatusBarController!
+    private var activity: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // As an LSUIElement accessory whose only window sits at desktop level,
+        // the app is a prime App Nap target — which would throttle/suspend the
+        // 5 s poll loop and drop the logger socket. Opt out (but still allow the
+        // Mac to sleep normally) so polling stays live.
+        activity = ProcessInfo.processInfo.beginActivity(
+            options: .userInitiatedAllowingIdleSystemSleep,
+            reason: "Live inverter polling")
+
         let settings = Settings.shared
         poller = DataPoller(settings: settings)
 

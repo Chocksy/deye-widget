@@ -40,7 +40,7 @@ The app is **ad-hoc signed and not notarized**, so on first launch Gatekeeper wi
 - clear the quarantine flag from the terminal:
 
   ```sh
-  xattr -dc /Applications/DeyeWidget.app
+  xattr -cr /Applications/DeyeWidget.app
   open /Applications/DeyeWidget.app
   ```
 
