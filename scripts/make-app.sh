@@ -17,13 +17,12 @@ cp "$BIN" "$APP/Contents/MacOS/DeyeWidget"
 
 sed "s/__VERSION__/$VERSION/g" scripts/Info.plist.template > "$APP/Contents/Info.plist"
 
-echo "==> generating app icon"
+echo "==> building app icon from assets/icon-1024.png"
+MASTER="assets/icon-1024.png"
 ICONSET="$(mktemp -d)/AppIcon.iconset"
 mkdir -p "$ICONSET"
-MASTER="$(mktemp -d)/icon.png"
-swift scripts/make-icon.swift "$MASTER" >/dev/null
 for sz in 16 32 128 256 512; do
-    sips -z "$sz" "$sz"       "$MASTER" --out "$ICONSET/icon_${sz}x${sz}.png"    >/dev/null
+    sips -z "$sz" "$sz"         "$MASTER" --out "$ICONSET/icon_${sz}x${sz}.png"    >/dev/null
     sips -z $((sz*2)) $((sz*2)) "$MASTER" --out "$ICONSET/icon_${sz}x${sz}@2x.png" >/dev/null
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
