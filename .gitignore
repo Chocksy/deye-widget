@@ -1,6 +1,10 @@
 # Swift Package Manager build output
 .build/
 
+# Packaging artifacts (built by scripts/make-app.sh + make-dmg.sh)
+DeyeWidget.app/
+*.dmg
+
 # macOS
 .DS_Store
 

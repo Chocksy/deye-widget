@@ -68,6 +68,11 @@ final class Settings: ObservableObject {
     var isConfigured: Bool { !host.isEmpty && loggerSerial != 0 }
 
     private init() {
+        // Bare-executable builds stored config under the "DeyeWidget" domain; the
+        // .app bundle uses com.chocksy.deyewidget. Copy connection settings across
+        // once so an existing install keeps working after upgrading to the bundle.
+        Self.migrateLegacyDefaultsIfNeeded()
+
         // Neutral defaults — the user provides host + logger serial via Settings.
         host = defaults.string(forKey: Keys.host) ?? ""
         let p = defaults.integer(forKey: Keys.port)
@@ -80,6 +85,25 @@ final class Settings: ObservableObject {
         pollInterval = pi > 0 ? pi : 5.0
         sizePreset = (defaults.string(forKey: Keys.sizePreset)).flatMap { SizePreset(rawValue: $0) } ?? .medium
         showChart = (defaults.object(forKey: Keys.showChart) as? Bool) ?? true
+    }
+
+    /// One-time copy of settings from the legacy "DeyeWidget" defaults domain
+    /// (used by the bare executable) into the current domain. No-op when the
+    /// current domain is already configured, when no legacy config exists, or
+    /// when running as the bare executable (legacy == current domain).
+    private static func migrateLegacyDefaultsIfNeeded() {
+        let std = UserDefaults.standard
+        if !(std.string(forKey: Keys.host) ?? "").isEmpty { return }
+        guard let legacy = UserDefaults(suiteName: "DeyeWidget"),
+              let legacyHost = legacy.string(forKey: Keys.host), !legacyHost.isEmpty else { return }
+
+        std.set(legacyHost, forKey: Keys.host)
+        if let s = legacy.object(forKey: Keys.loggerSerial) as? Int { std.set(s, forKey: Keys.loggerSerial) }
+        let p = legacy.integer(forKey: Keys.port); if p > 0 { std.set(p, forKey: Keys.port) }
+        let sl = legacy.integer(forKey: Keys.slaveId); if sl > 0 { std.set(sl, forKey: Keys.slaveId) }
+        let pi = legacy.double(forKey: Keys.pollInterval); if pi > 0 { std.set(pi, forKey: Keys.pollInterval) }
+        if let sp = legacy.string(forKey: Keys.sizePreset) { std.set(sp, forKey: Keys.sizePreset) }
+        if let show = legacy.object(forKey: Keys.showChart) as? Bool { std.set(show, forKey: Keys.showChart) }
     }
 }
 

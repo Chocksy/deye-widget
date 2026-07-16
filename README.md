@@ -30,6 +30,31 @@ swift build -c release
 
 The app binary is at `.build/release/DeyeWidget`.
 
+## Install
+
+**From a release (recommended):** download `DeyeWidget-x.y.z.dmg` from the [Releases](https://github.com/Chocksy/deye-widget/releases) page, open it, and drag **DeyeWidget** onto the **Applications** shortcut.
+
+The app is **ad-hoc signed and not notarized**, so on first launch Gatekeeper will block it. Either:
+
+- Right-click **DeyeWidget.app** in Applications → **Open** → **Open** in the dialog (only needed once), or
+- clear the quarantine flag from the terminal:
+
+  ```sh
+  xattr -dc /Applications/DeyeWidget.app
+  open /Applications/DeyeWidget.app
+  ```
+
+Then set your logger **host** and **serial** via the menu-bar item → **Settings…** (see [Configuration](#configuration)). It runs as a menu-bar accessory with no Dock icon.
+
+**Build it yourself instead:**
+
+```sh
+scripts/make-app.sh 1.0.0     # produces DeyeWidget.app (ad-hoc signed)
+scripts/make-dmg.sh 1.0.0     # optional: packages DeyeWidget-1.0.0.dmg
+cp -R DeyeWidget.app /Applications/
+open /Applications/DeyeWidget.app
+```
+
 Quick protocol sanity check without the GUI (prints all mapped values once and exits):
 
 ```sh
