@@ -170,46 +170,48 @@ struct FlowView: View {
         }
     }
 
-    private var leftNodes: [DashNode] {
+    private func dashNode(_ kind: NodeKind) -> DashNode {
         let d = poller.data
-        let pvW = bigWatts(d.pvTotal), miW = bigWatts(d.miPower), gridW = bigWatts(d.gridPower)
-        let importing = d.gridImporting, exporting = d.gridExporting
-        let charging = d.batteryCharging, discharging = d.batteryDischarging
-        return [
-            DashNode(kind: .pv, name: "SOLAR PV", icon: "sun.max.fill", identity: Palette.pv,
-                     semantic: d.pvTotal > 20 ? Semantic.feed : Semantic.idle,
-                     magnitude: Double(d.pvTotal), big: pvW.0, unit: pvW.1,
-                     secondary: String(format: "%.1f kWh today", d.dayPV), feeding: true),
-            DashNode(kind: .mi, name: "MI · HUAWEI", icon: "sun.horizon.fill", identity: Palette.mi,
-                     semantic: abs(d.miPower) > 20 ? Semantic.feed : Semantic.idle,
-                     magnitude: Double(abs(d.miPower)), big: miW.0, unit: miW.1,
-                     secondary: "AC-coupled PV", feeding: true),
-            DashNode(kind: .grid, name: "GRID", icon: "bolt.horizontal.fill", identity: Palette.gridExport,
-                     semantic: importing ? Semantic.draw : (exporting ? Semantic.exportTeal : Semantic.idle),
-                     magnitude: Double(abs(d.gridPower)), big: gridW.0, unit: gridW.1,
-                     secondary: String(format: "↓%.1f  ↑%.1f kWh", d.dayGridImport, d.dayGridExport),
-                     feeding: importing),
-            DashNode(kind: .battery, name: "BATTERY", icon: batterySymbol(d.soc), identity: Palette.batteryDischarge,
-                     semantic: discharging ? Semantic.feed : (charging ? Semantic.draw : Semantic.idle),
-                     magnitude: Double(abs(d.batteryPower)), big: "\(d.soc)", unit: "%",
-                     secondary: String(format: "%d W · %.1f V · %@", abs(d.batteryPower), d.batteryVoltage,
-                                       charging ? "charging" : (discharging ? "discharging" : "idle")),
-                     feeding: discharging)
-        ]
-    }
-
-    private var rightNodes: [DashNode] {
-        let d = poller.data
-        let houseW = bigWatts(d.loadPower)
-        return [
-            DashNode(kind: .house, name: "HOUSE", icon: "house.fill", identity: Palette.house,
-                     semantic: d.loadPower > 20 ? Semantic.draw : Semantic.idle,
-                     magnitude: Double(d.loadPower), big: houseW.0, unit: houseW.1,
-                     secondary: String(format: "%.1f kWh today", d.dayLoad), feeding: false),
-            DashNode(kind: .ev, name: "EV", icon: "car.fill", identity: Palette.ev,
-                     semantic: Semantic.idle, magnitude: 0, big: "—", unit: "",
-                     secondary: "waiting", feeding: false)
-        ]
+        switch kind {
+        case .pv:
+            let w = bigWatts(d.pvTotal)
+            return DashNode(kind: .pv, name: "SOLAR PV", icon: "sun.max.fill", identity: Palette.pv,
+                            semantic: d.pvTotal > 20 ? Semantic.feed : Semantic.idle,
+                            magnitude: Double(d.pvTotal), big: w.0, unit: w.1,
+                            secondary: String(format: "%.1f kWh today", d.dayPV), feeding: true)
+        case .mi:
+            let w = bigWatts(d.miPower)
+            return DashNode(kind: .mi, name: "MI · HUAWEI", icon: "sun.horizon.fill", identity: Palette.mi,
+                            semantic: abs(d.miPower) > 20 ? Semantic.feed : Semantic.idle,
+                            magnitude: Double(abs(d.miPower)), big: w.0, unit: w.1,
+                            secondary: "AC-coupled PV", feeding: true)
+        case .grid:
+            let w = bigWatts(d.gridPower)
+            let importing = d.gridImporting, exporting = d.gridExporting
+            return DashNode(kind: .grid, name: "GRID", icon: "bolt.horizontal.fill", identity: Palette.gridExport,
+                            semantic: importing ? Semantic.draw : (exporting ? Semantic.exportTeal : Semantic.idle),
+                            magnitude: Double(abs(d.gridPower)), big: w.0, unit: w.1,
+                            secondary: String(format: "↓%.1f  ↑%.1f kWh", d.dayGridImport, d.dayGridExport),
+                            feeding: importing)
+        case .battery:
+            let charging = d.batteryCharging, discharging = d.batteryDischarging
+            return DashNode(kind: .battery, name: "BATTERY", icon: batterySymbol(d.soc), identity: Palette.batteryDischarge,
+                            semantic: discharging ? Semantic.feed : (charging ? Semantic.draw : Semantic.idle),
+                            magnitude: Double(abs(d.batteryPower)), big: "\(d.soc)", unit: "%",
+                            secondary: String(format: "%d W · %.1f V · %@", abs(d.batteryPower), d.batteryVoltage,
+                                              charging ? "charging" : (discharging ? "discharging" : "idle")),
+                            feeding: discharging)
+        case .house:
+            let w = bigWatts(d.loadPower)
+            return DashNode(kind: .house, name: "HOUSE", icon: "house.fill", identity: Palette.house,
+                            semantic: d.loadPower > 20 ? Semantic.draw : Semantic.idle,
+                            magnitude: Double(d.loadPower), big: w.0, unit: w.1,
+                            secondary: String(format: "%.1f kWh today", d.dayLoad), feeding: false)
+        case .ev:
+            return DashNode(kind: .ev, name: "EV", icon: "car.fill", identity: Palette.ev,
+                            semantic: Semantic.idle, magnitude: 0, big: "—", unit: "",
+                            secondary: "waiting", feeding: false)
+        }
     }
 
     private func tier(_ kind: NodeKind, active: Set<NodeKind>, maxActive: Double, mag: Double) -> Tier {
@@ -220,16 +222,33 @@ struct FlowView: View {
 
     private func tierHeight(_ t: Tier) -> CGFloat {
         switch t {
-        case .hero: return sc(88)
-        case .active: return sc(62)
+        case .hero: return sc(86)
+        case .active: return sc(70)
         case .idle: return sc(24)
         }
     }
 
-    /// Fluid column layout: top-aligned start, items distributed across the FULL
-    /// height with equal flexible gaps (no centering, no dead zones). Heights
-    /// auto-scale down if content + minimum gaps would overflow. Returns
-    /// per-node (height, centerY).
+    /// Demote the smallest-|W| non-idle card one tier until the column content
+    /// (heights + min gaps) fits `availH`, so it never crosses the bottom bar.
+    private func fitTiers(_ items: [(tier: Tier, mag: Double)], availH: CGFloat) -> [Tier] {
+        var tiers = items.map { $0.tier }
+        let n = tiers.count
+        let minGap = sc(8)
+        func total() -> CGFloat { tiers.map { tierHeight($0) }.reduce(0, +) + CGFloat(max(0, n - 1)) * minGap }
+        while total() > availH {
+            var idx = -1
+            var best = Double.infinity
+            for i in tiers.indices where tiers[i] != .idle {
+                if items[i].mag < best { best = items[i].mag; idx = i }
+            }
+            if idx < 0 { break }
+            tiers[idx] = tiers[idx] == .hero ? .active : .idle
+        }
+        return tiers
+    }
+
+    /// Fluid layout: top-aligned, items distributed across `availH` with equal
+    /// flexible gaps (min 8pt). A proportional compress is a final safety net.
     private func columnLayout(_ tiers: [Tier], availH: CGFloat) -> [(h: CGFloat, cy: CGFloat)] {
         var heights = tiers.map { tierHeight($0) }
         let n = heights.count
@@ -251,6 +270,37 @@ struct FlowView: View {
         return result
     }
 
+    private struct Placement { let cx: CGFloat; let cy: CGFloat; let hgt: CGFloat; let tier: Tier }
+
+    /// Compute per-node placement (column x, center y, height, tier) for the
+    /// current data. Kept out of the ViewBuilder so it can use loops. Battery
+    /// migrates columns per `poller.batteryOnRight`.
+    private func dashPlacement(w: CGFloat, h: CGFloat, colW: CGFloat,
+                               leftCX: CGFloat, rightCX: CGFloat) -> [NodeKind: Placement] {
+        let d = poller.data
+        let active = poller.activeNodes
+        let maxActive = max(active.map { magnitudeOf($0, d) }.max() ?? 1, 1)
+        let bottomInset = sc(12)                 // hard gap before the stat bar
+        let usableH = max(h - bottomInset, 1)
+
+        let leftKinds: [NodeKind] = poller.batteryOnRight ? [.pv, .mi, .grid] : [.pv, .mi, .grid, .battery]
+        let rightKinds: [NodeKind] = poller.batteryOnRight ? [.house, .battery, .ev] : [.house, .ev]
+
+        func items(_ kinds: [NodeKind]) -> [(tier: Tier, mag: Double)] {
+            kinds.map { (tier($0, active: active, maxActive: maxActive, mag: magnitudeOf($0, d)),
+                         magnitudeOf($0, d)) }
+        }
+        let lt = fitTiers(items(leftKinds), availH: usableH)
+        let rt = fitTiers(items(rightKinds), availH: usableH)
+        let ll = columnLayout(lt, availH: usableH)
+        let rl = columnLayout(rt, availH: usableH)
+
+        var place: [NodeKind: Placement] = [:]
+        for (i, k) in leftKinds.enumerated() { place[k] = Placement(cx: leftCX, cy: ll[i].cy, hgt: ll[i].h, tier: lt[i]) }
+        for (i, k) in rightKinds.enumerated() { place[k] = Placement(cx: rightCX, cy: rl[i].cy, hgt: rl[i].h, tier: rt[i]) }
+        return place
+    }
+
     private var dashboardView: some View {
         VStack(spacing: 0) {
             header
@@ -265,50 +315,42 @@ struct FlowView: View {
                 .padding(.bottom, sc(9))
         }
         .animation(.spring(duration: 0.6, bounce: 0.15), value: poller.activeNodes)
+        .animation(.spring(duration: 0.55, bounce: 0.1), value: poller.batteryOnRight)
     }
 
     private var dashboardBody: some View {
         GeometryReader { geo in
             let w = geo.size.width
             let h = geo.size.height
-            let outer = sc(20)
-            let corridor = sc(110)   // tighter corridor -> wider cards (~235pt @1x)
+            let outer = sc(20)                       // symmetric side margins
+            let corridor = sc(110)                   // tight corridor -> wide cards
             let colW = (w - 2 * outer - corridor) / 2
             let leftCX = outer + colW / 2
             let rightCX = w - outer - colW / 2
             let center = CGPoint(x: w / 2, y: h / 2)
-
-            let d = poller.data
-            let ln = leftNodes, rn = rightNodes
-            let active = poller.activeNodes
-            let maxActive = max(active.map { magnitudeOf($0, d) }.max() ?? 1, 1)
-
-            let lt = ln.map { tier($0.kind, active: active, maxActive: maxActive, mag: $0.magnitude) }
-            let rt = rn.map { tier($0.kind, active: active, maxActive: maxActive, mag: $0.magnitude) }
-            let ll = columnLayout(lt, availH: h)
-            let rl = columnLayout(rt, availH: h)
+            let place = dashPlacement(w: w, h: h, colW: colW, leftCX: leftCX, rightCX: rightCX)
 
             ZStack {
                 TimelineView(.animation) { tl in
                     Canvas { ctx, _ in
-                        for i in ln.indices {
-                            let edge = CGPoint(x: leftCX + colW / 2, y: ll[i].cy)
-                            drawSpine(ctx: ctx, cardEdge: edge, center: center, node: ln[i], tier: lt[i], date: tl.date)
-                        }
-                        for i in rn.indices {
-                            let edge = CGPoint(x: rightCX - colW / 2, y: rl[i].cy)
-                            drawSpine(ctx: ctx, cardEdge: edge, center: center, node: rn[i], tier: rt[i], date: tl.date)
+                        for k in NodeKind.allCases {
+                            guard let p = place[k] else { continue }
+                            let onLeft = p.cx < center.x
+                            let edge = CGPoint(x: onLeft ? p.cx + colW / 2 : p.cx - colW / 2, y: p.cy)
+                            drawSpine(ctx: ctx, cardEdge: edge, center: center,
+                                      node: dashNode(k), tier: p.tier, date: tl.date)
                         }
                     }
                 }
 
                 inverterNode.position(center)
 
-                ForEach(ln.indices, id: \.self) { i in
-                    tierView(ln[i], tier: lt[i]).frame(width: colW, height: ll[i].h).position(x: leftCX, y: ll[i].cy)
-                }
-                ForEach(rn.indices, id: \.self) { i in
-                    tierView(rn[i], tier: rt[i]).frame(width: colW, height: rl[i].h).position(x: rightCX, y: rl[i].cy)
+                ForEach(NodeKind.allCases, id: \.self) { k in
+                    if let p = place[k] {
+                        tierView(dashNode(k), tier: p.tier)
+                            .frame(width: colW, height: p.hgt)
+                            .position(x: p.cx, y: p.cy)
+                    }
                 }
             }
         }

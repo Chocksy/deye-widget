@@ -1,6 +1,32 @@
 import AppKit
 import SwiftUI
 
+// MARK: - Battery migration self-test (--migrationcheck)
+
+func runMigrationCheck() -> Int32 {
+    func run(_ label: String, _ powers: [Int]) -> Bool {
+        var m = BatteryMigration()
+        for p in powers { m.update(batteryPower: p) }
+        print("  \(label): onRight=\(m.onRight)")
+        return m.onRight
+    }
+    print("=== BatteryMigration self-test ===")
+    // + = discharge, - = charge. Threshold 100 W, streak 6.
+    let charge6 = run("charge -500W x6 -> RIGHT", Array(repeating: -500, count: 6)) == true
+    let discharge6 = run("discharge +500W x6 -> LEFT", Array(repeating: 500, count: 6)) == false
+    let small = run("+/-50W x10 -> no move (LEFT)", (0..<10).map { $0.isMultiple(of: 2) ? 50 : -50 }) == false
+    let charge5 = run("charge -500W x5 (below streak) -> LEFT", Array(repeating: -500, count: 5)) == false
+    // charge to right, then a single small blip must NOT flip it back
+    var held = BatteryMigration()
+    for _ in 0..<6 { held.update(batteryPower: -500) }
+    held.update(batteryPower: 30)   // below floor
+    let sticky = held.onRight == true
+    print("  charge x6 then +30W blip -> stays RIGHT: \(sticky)")
+    let ok = charge6 && discharge6 && small && charge5 && sticky
+    print(ok ? "ALL PASS" : "FAIL")
+    return ok ? 0 : 1
+}
+
 // MARK: - CLI dump mode (no GUI)
 
 func runDump() -> Int32 {
@@ -91,6 +117,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - Entry point
 
+if CommandLine.arguments.contains("--migrationcheck") {
+    exit(runMigrationCheck())
+}
 if CommandLine.arguments.contains("--dump") {
     exit(runDump())
 }

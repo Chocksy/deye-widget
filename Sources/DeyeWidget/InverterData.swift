@@ -93,6 +93,31 @@ enum NodeKind: String, CaseIterable {
     case pv, mi, grid, battery, house, ev
 }
 
+/// Decides which column the Battery card lives in, with anti-ping-pong
+/// hysteresis: migrate to the right (consumers) only after 6 consecutive polls
+/// of charging at >= 100 W; back to the left after 6 consecutive polls of
+/// discharging at >= 100 W. Below the 100 W floor it holds position.
+struct BatteryMigration {
+    private(set) var onRight = false
+    private var chargeStreak = 0      // battery charging  (power <= -100)
+    private var dischargeStreak = 0   // battery discharging (power >= +100)
+
+    static let threshold = 100        // W floor
+    static let streak = 6             // consecutive polls (~30 s at 5 s)
+
+    mutating func update(batteryPower: Int) {   // + discharge, - charge
+        if batteryPower <= -BatteryMigration.threshold {
+            chargeStreak += 1; dischargeStreak = 0
+        } else if batteryPower >= BatteryMigration.threshold {
+            dischargeStreak += 1; chargeStreak = 0
+        } else {
+            chargeStreak = 0; dischargeStreak = 0   // below floor: hold
+        }
+        if chargeStreak >= BatteryMigration.streak { onRight = true }
+        if dischargeStreak >= BatteryMigration.streak { onRight = false }
+    }
+}
+
 /// One point of rolling power history for the chart pane.
 struct PowerSample: Identifiable {
     let id = UUID()
@@ -117,7 +142,11 @@ final class DataPoller: ObservableObject {
     /// Which nodes are currently "active" for the Dashboard tiers, tracked with
     /// hysteresis (promote at |W| >= 50, demote at < 20) so tiers don't flap.
     @Published var activeNodes: Set<NodeKind> = []
+    /// Whether the Battery card currently belongs in the right (consumers)
+    /// column — true while consistently charging (see BatteryMigration).
+    @Published var batteryOnRight = false
 
+    private var migration = BatteryMigration()
     private let maxHistory = 720
 
     private let engine: PollEngine
@@ -210,6 +239,9 @@ final class DataPoller: ObservableObject {
         update(.battery, Double(abs(d.batteryPower)))
         update(.house, Double(d.loadPower))
         activeNodes.remove(.ev)
+
+        migration.update(batteryPower: d.batteryPower)
+        if migration.onRight != batteryOnRight { batteryOnRight = migration.onRight }
     }
 }
 
