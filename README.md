@@ -1,18 +1,28 @@
 # DeyeWidget — live macOS desktop widget for Deye hybrid inverters
 
-A native macOS desktop widget that shows a **live power-flow graph** and a **rolling 60-minute power-history chart** for a Deye / Sunsynk single-phase hybrid inverter — read directly from the inverter's Solarman LSW logger over your LAN. No cloud, no Python, no account.
+A native macOS desktop widget for a Deye / Sunsynk single-phase hybrid inverter — read directly from the inverter's Solarman LSW logger over your LAN. Three display modes, live every 5 s. No cloud, no Python, no account.
 
-![DeyeWidget](docs/screenshot.png)
+![DeyeWidget — Dashboard mode](docs/screenshots/dashboard-large.png)
 
 ## Features
 
-- **Local only** — talks to the Solarman LSW logger on your LAN via the Solarman V5 protocol over TCP (Modbus RTU inside). No DeyeCloud, no internet round-trip.
-- **Live flow graph** — six nodes (PV, MI/AC-coupled PV, Grid, Battery, House, EV placeholder) around a central inverter, with animated energy dots that follow the true power direction. Polls every 5 s.
-- **Power Profile chart** — a rolling 60-minute history of House / MI / Battery / Grid watts plus battery SOC, drawn in the same aesthetic.
-- **Menu bar item** — battery SOC at a glance (`⚡ 90%`), plus a snapshot menu (load / PV+MI / grid / battery).
-- **Size presets** — Small / Medium / Large, everything scales crisply (not rasterized).
-- **Chart toggle** — show/hide the chart pane; the window collapses to just the flow graph.
-- **Desktop-level widget** — borderless, translucent, rounded card that floats above the wallpaper and desktop widgets but under your app windows. Drag it anywhere; position is remembered.
+- **Three display modes** — a magnitude-driven **Dashboard**, a Tesla-style **Flow** graph, and **Flow + Chart** with a 60-minute Power Profile. Switch from the menu bar (see below).
+- **Living Dashboard** — card **size** tracks each source/sink's power (hero / compact / idle-row tiers with hysteresis), card **tint** encodes direction (spring-green when feeding the inverter, coral when drawing, teal when exporting to the grid), and idle nodes collapse to quiet rows. The **Battery card migrates columns** by charge direction. Glowing connector "spines" carry |W|-scaled width and traveling dots.
+- **Local only** — talks to the Solarman LSW logger on your LAN via the Solarman V5 protocol over TCP (Modbus RTU inside). No DeyeCloud, no internet round-trip. Polls every 5 s.
+- **Power Profile chart** — a rolling 60-minute history of House / MI / Battery / Grid watts plus battery SOC.
+- **Menu bar item** — battery SOC at a glance (`⚡ 90%`), a live snapshot menu, and **Display** / **Size** submenus.
+- **Free scale** — a Settings slider from 60 %–130 % (with Small / Medium / Large shortcuts), so it fits any strip of screen. Everything scales crisply (parameterized, not rasterized).
+- **Grid frequency**, voltage, battery voltage and inverter temperature in the Dashboard footer.
+- **Desktop-level widget** — borderless, translucent, rounded card that floats above the wallpaper and macOS desktop widgets but under your app windows. Drag it anywhere; position, mode and scale are remembered. Runs as a menu-bar accessory (no Dock icon), and stays live in the background (opts out of App Nap).
+
+## Display modes
+
+| | |
+|---|---|
+| ![Dashboard](docs/screenshots/dashboard-large.png) | **Dashboard** — magnitude-driven cards with direction tint; the layout itself is the visualization. |
+| ![Flow](docs/screenshots/flow.png) | **Flow** — Tesla-style compact power-flow graph, six nodes around the inverter. |
+| ![Flow + Chart](docs/screenshots/flow-chart.png) | **Flow + Chart** — the flow graph plus a rolling 60-minute Power Profile. |
+| ![Dashboard, small](docs/screenshots/dashboard-small.png) | **Any size** — the free-scale slider dials the exact footprint for your monitor. |
 
 ## Requirements
 
@@ -49,8 +59,8 @@ Then set your logger **host** and **serial** via the menu-bar item → **Setting
 **Build it yourself instead:**
 
 ```sh
-scripts/make-app.sh 1.0.0     # produces DeyeWidget.app (ad-hoc signed)
-scripts/make-dmg.sh 1.0.0     # optional: packages DeyeWidget-1.0.0.dmg
+scripts/make-app.sh 1.2.0     # produces DeyeWidget.app (ad-hoc signed)
+scripts/make-dmg.sh 1.2.0     # optional: packages DeyeWidget-1.2.0.dmg
 cp -R DeyeWidget.app /Applications/
 open /Applications/DeyeWidget.app
 ```

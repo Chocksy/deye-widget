@@ -11,4 +11,5 @@ DeyeWidget.app/
 # Images (scratch); committed assets are whitelisted below
 *.png
 !docs/screenshot.png
+!docs/screenshots/*.png
 !assets/icon-1024.png

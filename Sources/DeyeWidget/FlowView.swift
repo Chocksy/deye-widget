@@ -60,7 +60,7 @@ struct FlowView: View {
     // Base design: 440x400 flow, +330 wide chart pane; Dashboard is 620 wide.
     static let flowWidth: CGFloat = 440
     static let chartWidth: CGFloat = 330
-    static let dashboardWidth: CGFloat = 620
+    static let dashboardWidth: CGFloat = 680
     static let baseHeight: CGFloat = 400
 
     private var nodeR: CGFloat { 25 * scale }   // node circle radius
@@ -323,7 +323,7 @@ struct FlowView: View {
             let w = geo.size.width
             let h = geo.size.height
             let outer = sc(20)                       // symmetric side margins
-            let corridor = sc(110)                   // tight corridor -> wide cards
+            let corridor = sc(170)                   // wide corridor -> long flow wires (cards keep width)
             let colW = (w - 2 * outer - corridor) / 2
             let leftCX = outer + colW / 2
             let rightCX = w - outer - colW / 2
