@@ -254,35 +254,45 @@ struct FlowView: View {
     private func dashCardView(_ c: DashCard) -> some View {
         // Icon glow scales with |W| (do NOT resize the card itself).
         let glow = c.active ? sc(2 + 6 * min(1, c.watts / 3000)) : 0
-        VStack(alignment: .leading, spacing: sc(3)) {
-            HStack(spacing: sc(5)) {
+        let badge = sc(52)
+        HStack(spacing: sc(10)) {
+            // Large leading icon badge — the card's identification anchor.
+            ZStack {
+                Circle()
+                    .fill(c.color.opacity(0.12))
+                    .overlay(Circle().stroke(c.color.opacity(c.active ? 0.35 : 0.15), lineWidth: 1))
+                    .frame(width: badge, height: badge)
+                    .shadow(color: c.active ? c.color.opacity(0.4) : .clear, radius: glow)
                 Image(systemName: c.icon)
-                    .font(.system(size: sc(12), weight: .semibold))
+                    .font(.system(size: sc(30), weight: .semibold))
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(c.active ? c.color : Color.secondary)
-                    .shadow(color: c.active ? c.color.opacity(0.7) : .clear, radius: glow)
+            }
+
+            VStack(alignment: .leading, spacing: sc(2)) {
                 Text(c.caption)
                     .font(.system(size: sc(9), weight: .semibold, design: .rounded))
                     .tracking(sc(0.8))
                     .foregroundStyle(.secondary)
-            }
-            HStack(alignment: .firstTextBaseline, spacing: sc(3)) {
-                Text(c.big)
-                    .font(.system(size: sc(c.bigSize), weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-                if !c.unit.isEmpty {
-                    Text(c.unit)
-                        .font(.system(size: sc(14), weight: .semibold, design: .rounded))
-                        .foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: sc(3)) {
+                    Text(c.big)
+                        .font(.system(size: sc(c.bigSize), weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                    if !c.unit.isEmpty {
+                        Text(c.unit)
+                            .font(.system(size: sc(14), weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                Text(c.secondary)
+                    .font(.system(size: sc(11), weight: .regular, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
-            Text(c.secondary)
-                .font(.system(size: sc(11), weight: .regular, design: .rounded))
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .padding(.horizontal, sc(12))
@@ -351,7 +361,7 @@ struct FlowView: View {
     private func bottomStat(_ icon: String, _ tint: Color, _ caption: String, _ value: String) -> some View {
         HStack(spacing: sc(6)) {
             Image(systemName: icon)
-                .font(.system(size: sc(11), weight: .semibold))
+                .font(.system(size: sc(13), weight: .semibold))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(tint)
             VStack(alignment: .leading, spacing: 0) {
