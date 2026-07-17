@@ -88,6 +88,11 @@ enum InverterDecoder {
 /// All blocking socket IO runs on a dedicated serial queue (`ioQueue`); the
 /// `SolarmanClient` is only ever touched from that queue. Published state is
 /// updated back on the main actor.
+/// The six dashboard nodes (fixed order within their columns).
+enum NodeKind: String, CaseIterable {
+    case pv, mi, grid, battery, house, ev
+}
+
 /// One point of rolling power history for the chart pane.
 struct PowerSample: Identifiable {
     let id = UUID()
@@ -109,6 +114,9 @@ final class DataPoller: ObservableObject {
     /// Rolling in-memory power history (~60 min at 5 s = 720 samples).
     /// Resets on app restart — not persisted.
     @Published var history: [PowerSample] = []
+    /// Which nodes are currently "active" for the Dashboard tiers, tracked with
+    /// hysteresis (promote at |W| >= 50, demote at < 20) so tiers don't flap.
+    @Published var activeNodes: Set<NodeKind> = []
 
     private let maxHistory = 720
 
@@ -168,6 +176,7 @@ final class DataPoller: ObservableObject {
             self.lastUpdate = Date()
             self.lastError = nil
             appendHistory(d)
+            updateTiers(d)
         case .failure(let err):
             self.connected = false
             self.lastError = String(describing: err)
@@ -186,6 +195,21 @@ final class DataPoller: ObservableObject {
         if history.count > maxHistory {
             history.removeFirst(history.count - maxHistory)
         }
+    }
+
+    /// Hysteresis: a node is active above 50 W, idle below 20 W, unchanged in
+    /// between. EV has no register yet, so it stays idle.
+    private func updateTiers(_ d: InverterData) {
+        func update(_ k: NodeKind, _ w: Double) {
+            if w >= 50 { activeNodes.insert(k) }
+            else if w < 20 { activeNodes.remove(k) }
+        }
+        update(.pv, Double(d.pvTotal))
+        update(.mi, Double(abs(d.miPower)))
+        update(.grid, Double(abs(d.gridPower)))
+        update(.battery, Double(abs(d.batteryPower)))
+        update(.house, Double(d.loadPower))
+        activeNodes.remove(.ev)
     }
 }
 

@@ -57,9 +57,10 @@ struct FlowView: View {
     /// rasterized via scaleEffect) so text stays crisp at every preset.
     var scale: CGFloat = 1.0
 
-    // Base design: 440x400 flow, +330 wide chart/dashboard pane when wide.
+    // Base design: 440x400 flow, +330 wide chart pane; Dashboard is 620 wide.
     static let flowWidth: CGFloat = 440
     static let chartWidth: CGFloat = 330
+    static let dashboardWidth: CGFloat = 620
     static let baseHeight: CGFloat = 400
 
     private var nodeR: CGFloat { 25 * scale }   // node circle radius
@@ -70,8 +71,13 @@ struct FlowView: View {
 
     /// Total content size for the current configuration.
     static func contentSize(displayMode: DisplayMode, scale: CGFloat) -> CGSize {
-        let w = (displayMode.isWide ? flowWidth + chartWidth : flowWidth) * scale
-        return CGSize(width: w, height: baseHeight * scale)
+        let base: CGFloat
+        switch displayMode {
+        case .flow: base = flowWidth
+        case .flowChart: base = flowWidth + chartWidth
+        case .dashboard: base = dashboardWidth
+        }
+        return CGSize(width: base * scale, height: baseHeight * scale)
     }
 
     var body: some View {
@@ -122,19 +128,29 @@ struct FlowView: View {
         }
     }
 
-    // MARK: - Dashboard mode (big-number cards)
+    // MARK: - Dashboard mode v2 (magnitude-driven tiers + semantic tint)
 
-    private struct DashCard {
-        let caption: String
+    private enum Tier { case hero, active, idle }
+
+    /// Semantic (direction) colors layered over each node's identity hue.
+    private enum Semantic {
+        static let feed = Color(hue: 0.37, saturation: 0.55, brightness: 0.72)   // ~133° spring green
+        static let draw = Color(hue: 0.035, saturation: 0.78, brightness: 0.98)  // ~13° coral
+        static let exportTeal = Palette.gridExport
+        static let idle = Color.gray
+    }
+
+    private struct DashNode {
+        let kind: NodeKind
+        let name: String
         let icon: String
-        let color: Color
+        let identity: Color   // badge hue
+        let semantic: Color   // stroke / wash / value / connector
+        let magnitude: Double // |W|
         let big: String
         let unit: String
         let secondary: String
-        let watts: Double   // magnitude, drives connector emphasis + icon glow
-        let dir: FlowDir
-        let active: Bool
-        var bigSize: CGFloat = 27
+        let feeding: Bool     // dot travel: true = node -> inverter
     }
 
     private func bigWatts(_ w: Int) -> (String, String) {
@@ -143,189 +159,275 @@ struct FlowView: View {
         return ("\(a)", "W")
     }
 
-    private var leftCards: [DashCard] {
+    private func magnitudeOf(_ k: NodeKind, _ d: InverterData) -> Double {
+        switch k {
+        case .pv: return Double(d.pvTotal)
+        case .mi: return Double(abs(d.miPower))
+        case .grid: return Double(abs(d.gridPower))
+        case .battery: return Double(abs(d.batteryPower))
+        case .house: return Double(d.loadPower)
+        case .ev: return 0
+        }
+    }
+
+    private var leftNodes: [DashNode] {
         let d = poller.data
         let pvW = bigWatts(d.pvTotal), miW = bigWatts(d.miPower), gridW = bigWatts(d.gridPower)
         let importing = d.gridImporting, exporting = d.gridExporting
         let charging = d.batteryCharging, discharging = d.batteryDischarging
         return [
-            DashCard(caption: "SOLAR PV", icon: "sun.max.fill", color: Palette.pv,
-                     big: pvW.0, unit: pvW.1, secondary: String(format: "%.1f kWh today", d.dayPV),
-                     watts: Double(abs(d.pvTotal)), dir: d.pvTotal > 20 ? .toInverter : .none,
-                     active: d.pvTotal > 20),
-            DashCard(caption: "MI · HUAWEI", icon: "sun.horizon.fill", color: Palette.mi,
-                     big: miW.0, unit: miW.1, secondary: "AC-coupled PV",
-                     watts: Double(abs(d.miPower)), dir: d.miPower > 20 ? .toInverter : .none,
-                     active: abs(d.miPower) > 20),
-            DashCard(caption: "GRID", icon: "bolt.horizontal.fill",
-                     color: importing ? Palette.gridImport : (exporting ? Palette.gridExport : Palette.idle),
-                     big: gridW.0, unit: gridW.1,
+            DashNode(kind: .pv, name: "SOLAR PV", icon: "sun.max.fill", identity: Palette.pv,
+                     semantic: d.pvTotal > 20 ? Semantic.feed : Semantic.idle,
+                     magnitude: Double(d.pvTotal), big: pvW.0, unit: pvW.1,
+                     secondary: String(format: "%.1f kWh today", d.dayPV), feeding: true),
+            DashNode(kind: .mi, name: "MI · HUAWEI", icon: "sun.horizon.fill", identity: Palette.mi,
+                     semantic: abs(d.miPower) > 20 ? Semantic.feed : Semantic.idle,
+                     magnitude: Double(abs(d.miPower)), big: miW.0, unit: miW.1,
+                     secondary: "AC-coupled PV", feeding: true),
+            DashNode(kind: .grid, name: "GRID", icon: "bolt.horizontal.fill", identity: Palette.gridExport,
+                     semantic: importing ? Semantic.draw : (exporting ? Semantic.exportTeal : Semantic.idle),
+                     magnitude: Double(abs(d.gridPower)), big: gridW.0, unit: gridW.1,
                      secondary: String(format: "↓%.1f  ↑%.1f kWh", d.dayGridImport, d.dayGridExport),
-                     watts: Double(abs(d.gridPower)),
-                     dir: importing ? .toInverter : (exporting ? .fromInverter : .none),
-                     active: importing || exporting),
-            DashCard(caption: "BATTERY", icon: batterySymbol(d.soc),
-                     color: charging ? Palette.batteryCharge : (discharging ? Palette.batteryDischarge : Palette.idle),
-                     big: "\(d.soc)", unit: "%",
+                     feeding: importing),
+            DashNode(kind: .battery, name: "BATTERY", icon: batterySymbol(d.soc), identity: Palette.batteryDischarge,
+                     semantic: discharging ? Semantic.feed : (charging ? Semantic.draw : Semantic.idle),
+                     magnitude: Double(abs(d.batteryPower)), big: "\(d.soc)", unit: "%",
                      secondary: String(format: "%d W · %.1f V · %@", abs(d.batteryPower), d.batteryVoltage,
-                                       charging ? "charge" : (discharging ? "discharge" : "idle")),
-                     watts: Double(abs(d.batteryPower)),
-                     dir: discharging ? .toInverter : (charging ? .fromInverter : .none),
-                     active: charging || discharging)
+                                       charging ? "charging" : (discharging ? "discharging" : "idle")),
+                     feeding: discharging)
         ]
     }
 
-    private var rightCards: [DashCard] {
+    private var rightNodes: [DashNode] {
         let d = poller.data
         let houseW = bigWatts(d.loadPower)
         return [
-            DashCard(caption: "HOUSE", icon: "house.fill", color: Palette.house,
-                     big: houseW.0, unit: houseW.1, secondary: String(format: "%.1f kWh today", d.dayLoad),
-                     watts: Double(abs(d.loadPower)), dir: d.loadPower > 20 ? .fromInverter : .none,
-                     active: d.loadPower > 20, bigSize: 32),
-            DashCard(caption: "EV", icon: "car.fill", color: Palette.ev,
-                     big: "—", unit: "", secondary: "waiting",
-                     watts: 0, dir: .none, active: false, bigSize: 32)
+            DashNode(kind: .house, name: "HOUSE", icon: "house.fill", identity: Palette.house,
+                     semantic: d.loadPower > 20 ? Semantic.draw : Semantic.idle,
+                     magnitude: Double(d.loadPower), big: houseW.0, unit: houseW.1,
+                     secondary: String(format: "%.1f kWh today", d.dayLoad), feeding: false),
+            DashNode(kind: .ev, name: "EV", icon: "car.fill", identity: Palette.ev,
+                     semantic: Semantic.idle, magnitude: 0, big: "—", unit: "",
+                     secondary: "waiting", feeding: false)
         ]
+    }
+
+    private func tier(_ kind: NodeKind, active: Set<NodeKind>, maxActive: Double, mag: Double) -> Tier {
+        if active.isEmpty { return .active }          // all idle -> neutral compacts (never looks broken)
+        guard active.contains(kind) else { return .idle }
+        return mag >= 0.4 * maxActive ? .hero : .active
+    }
+
+    private func tierHeight(_ t: Tier) -> CGFloat {
+        switch t {
+        case .hero: return sc(88)
+        case .active: return sc(62)
+        case .idle: return sc(24)
+        }
+    }
+
+    private func gap(_ a: Tier, _ b: Tier) -> CGFloat {
+        if a == .idle && b == .idle { return sc(4) }   // idle rows cluster tighter
+        if a == .idle || b == .idle { return sc(6) }
+        return sc(10)
+    }
+
+    /// Vertically-centered column layout; auto-scales heights so it never
+    /// overflows `availH`. Returns per-node (height, centerY).
+    private func columnLayout(_ tiers: [Tier], availH: CGFloat) -> [(h: CGFloat, cy: CGFloat)] {
+        var heights = tiers.map { tierHeight($0) }
+        var gaps: [CGFloat] = []
+        if tiers.count > 1 { for i in 1..<tiers.count { gaps.append(gap(tiers[i - 1], tiers[i])) } }
+        var total = heights.reduce(0, +) + gaps.reduce(0, +)
+        if total > availH && total > 0 {
+            let f = availH / total
+            heights = heights.map { $0 * f }
+            gaps = gaps.map { $0 * f }
+            total = availH
+        }
+        var result: [(CGFloat, CGFloat)] = []
+        var y = (availH - total) / 2
+        for i in heights.indices {
+            if i > 0 { y += gaps[i - 1] }
+            result.append((heights[i], y + heights[i] / 2))
+            y += heights[i]
+        }
+        return result
     }
 
     private var dashboardView: some View {
         VStack(spacing: 0) {
             header
-                .padding(.horizontal, sc(18))
+                .padding(.horizontal, sc(20))
                 .padding(.top, sc(14))
-                .padding(.bottom, sc(4))
-            dashboardGrid
-                .padding(.horizontal, sc(14))
+                .padding(.bottom, sc(6))
+            dashboardBody
             Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
             dashboardBottomBar
-                .padding(.horizontal, sc(18))
-                .padding(.vertical, sc(9))
+                .padding(.horizontal, sc(20))
+                .padding(.top, sc(13))    // +4 breathing above the hairline
+                .padding(.bottom, sc(9))
         }
+        .animation(.spring(duration: 0.6, bounce: 0.15), value: poller.activeNodes)
     }
 
-    private var dashboardGrid: some View {
+    private var dashboardBody: some View {
         GeometryReader { geo in
             let w = geo.size.width
             let h = geo.size.height
-            let colGap = sc(10)
-            let centerW = sc(96)
-            let sideW = (w - centerW - 2 * colGap) / 2
-            let leftCX = sideW / 2
-            let rightCX = w - sideW / 2
+            let outer = sc(20)
+            let corridor = sc(150)
+            let colW = (w - 2 * outer - corridor) / 2
+            let leftCX = outer + colW / 2
+            let rightCX = w - outer - colW / 2
             let center = CGPoint(x: w / 2, y: h / 2)
 
-            let rowGap = sc(8)
-            let cardHL = (h - 3 * rowGap) / 4
-            let leftYs = (0..<4).map { cardHL / 2 + (cardHL + rowGap) * CGFloat($0) }
-            let cardHR = (h - rowGap) / 2
-            let rightYs = (0..<2).map { cardHR / 2 + (cardHR + rowGap) * CGFloat($0) }
+            let d = poller.data
+            let ln = leftNodes, rn = rightNodes
+            let active = poller.activeNodes
+            let maxActive = max(active.map { magnitudeOf($0, d) }.max() ?? 1, 1)
 
-            let lc = leftCards
-            let rc = rightCards
+            let lt = ln.map { tier($0.kind, active: active, maxActive: maxActive, mag: $0.magnitude) }
+            let rt = rn.map { tier($0.kind, active: active, maxActive: maxActive, mag: $0.magnitude) }
+            let ll = columnLayout(lt, availH: h)
+            let rl = columnLayout(rt, availH: h)
 
             ZStack {
                 TimelineView(.animation) { tl in
                     Canvas { ctx, _ in
-                        for i in 0..<4 {
-                            let edge = CGPoint(x: leftCX + sideW / 2, y: leftYs[i])
-                            drawDashConnection(ctx: ctx, cardEdge: edge, center: center, card: lc[i], date: tl.date)
+                        for i in ln.indices {
+                            let edge = CGPoint(x: leftCX + colW / 2, y: ll[i].cy)
+                            drawSpine(ctx: ctx, cardEdge: edge, center: center, node: ln[i], tier: lt[i], date: tl.date)
                         }
-                        for i in 0..<2 {
-                            let edge = CGPoint(x: rightCX - sideW / 2, y: rightYs[i])
-                            drawDashConnection(ctx: ctx, cardEdge: edge, center: center, card: rc[i], date: tl.date)
+                        for i in rn.indices {
+                            let edge = CGPoint(x: rightCX - colW / 2, y: rl[i].cy)
+                            drawSpine(ctx: ctx, cardEdge: edge, center: center, node: rn[i], tier: rt[i], date: tl.date)
                         }
                     }
                 }
 
                 inverterNode.position(center)
 
-                ForEach(0..<4, id: \.self) { i in
-                    dashCardView(lc[i]).frame(width: sideW, height: cardHL).position(x: leftCX, y: leftYs[i])
+                ForEach(ln.indices, id: \.self) { i in
+                    tierView(ln[i], tier: lt[i]).frame(width: colW, height: ll[i].h).position(x: leftCX, y: ll[i].cy)
                 }
-                ForEach(0..<2, id: \.self) { i in
-                    dashCardView(rc[i]).frame(width: sideW, height: cardHR).position(x: rightCX, y: rightYs[i])
+                ForEach(rn.indices, id: \.self) { i in
+                    tierView(rn[i], tier: rt[i]).frame(width: colW, height: rl[i].h).position(x: rightCX, y: rl[i].cy)
                 }
             }
         }
     }
 
     @ViewBuilder
-    private func dashCardView(_ c: DashCard) -> some View {
-        // Icon glow scales with |W| (do NOT resize the card itself).
-        let glow = c.active ? sc(2 + 6 * min(1, c.watts / 3000)) : 0
-        let badge = sc(52)
+    private func tierView(_ n: DashNode, tier: Tier) -> some View {
+        if tier == .idle {
+            idleRow(n)
+        } else {
+            dashTierCard(n, hero: tier == .hero)
+        }
+    }
+
+    private func idleRow(_ n: DashNode) -> some View {
+        HStack(spacing: sc(8)) {
+            Image(systemName: n.icon)
+                .font(.system(size: sc(16), weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(n.identity.opacity(0.7))
+            Text(n.name)
+                .font(.system(size: sc(10), weight: .semibold, design: .rounded))
+                .tracking(sc(0.6))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Text(n.kind == .ev ? "waiting" : (n.unit.isEmpty ? n.big : "\(n.big) \(n.unit)"))
+                .font(.system(size: sc(11), weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, sc(10))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .opacity(0.55)
+    }
+
+    @ViewBuilder
+    private func dashTierCard(_ n: DashNode, hero: Bool) -> some View {
+        let active = poller.activeNodes.contains(n.kind)
+        let badge = hero ? sc(52) : sc(40)
+        let iconSize = hero ? sc(30) : sc(23)
+        let valueSize = hero ? sc(34) : sc(24)
+        let tint = active ? n.semantic : Semantic.idle
+        let frac = min(1.0, n.magnitude / 3000.0)
+        let glow = active ? sc(2 + 6 * frac) : 0
+
         HStack(spacing: sc(10)) {
-            // Large leading icon badge — the card's identification anchor.
             ZStack {
                 Circle()
-                    .fill(c.color.opacity(0.12))
-                    .overlay(Circle().stroke(c.color.opacity(c.active ? 0.35 : 0.15), lineWidth: 1))
+                    .fill(n.identity.opacity(0.14))
+                    .overlay(Circle().stroke(n.identity.opacity(active ? 0.4 : 0.15), lineWidth: 1))
                     .frame(width: badge, height: badge)
-                    .shadow(color: c.active ? c.color.opacity(0.4) : .clear, radius: glow)
-                Image(systemName: c.icon)
-                    .font(.system(size: sc(30), weight: .semibold))
+                    .shadow(color: active ? tint.opacity(0.5) : .clear, radius: glow)
+                Image(systemName: n.icon)
+                    .font(.system(size: iconSize, weight: .semibold))
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(c.active ? c.color : Color.secondary)
+                    .foregroundStyle(active ? n.identity : Color.secondary)
             }
-
-            VStack(alignment: .leading, spacing: sc(2)) {
-                Text(c.caption)
+            VStack(alignment: .leading, spacing: sc(1)) {
+                Text(n.name)
                     .font(.system(size: sc(9), weight: .semibold, design: .rounded))
                     .tracking(sc(0.8))
                     .foregroundStyle(.secondary)
                 HStack(alignment: .firstTextBaseline, spacing: sc(3)) {
-                    Text(c.big)
-                        .font(.system(size: sc(c.bigSize), weight: .bold, design: .rounded))
+                    Text(n.big)
+                        .font(.system(size: valueSize, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .contentTransition(.numericText())
-                    if !c.unit.isEmpty {
-                        Text(c.unit)
-                            .font(.system(size: sc(14), weight: .semibold, design: .rounded))
+                        .foregroundStyle(active ? tint : Color.primary)
+                    if !n.unit.isEmpty {
+                        Text(n.unit)
+                            .font(.system(size: hero ? sc(15) : sc(12), weight: .semibold, design: .rounded))
                             .foregroundStyle(.secondary)
                     }
                 }
-                Text(c.secondary)
+                Text(n.secondary)
                     .font(.system(size: sc(11), weight: .regular, design: .rounded))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.75)
             }
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .padding(.horizontal, sc(12))
-        .padding(.vertical, sc(8))
+        .padding(.horizontal, sc(14))
+        .padding(.vertical, sc(12))
         .background(
             RoundedRectangle(cornerRadius: sc(16), style: .continuous)
                 .fill(.ultraThinMaterial)
+                .overlay(RoundedRectangle(cornerRadius: sc(16), style: .continuous).fill(tint.opacity(active ? 0.08 : 0)))
                 .overlay(RoundedRectangle(cornerRadius: sc(16), style: .continuous)
-                    .stroke(Color.white.opacity(0.10), lineWidth: 1))
+                    .stroke(tint.opacity(active ? (hero ? 0.55 : 0.35) : 0.12), lineWidth: hero ? 1.5 : 1))
         )
-        .opacity(c.active ? 1.0 : 0.6)
     }
 
-    /// Card-edge → inverter connector with dynamic width + dot count/speed.
-    private func drawDashConnection(ctx: GraphicsContext, cardEdge: CGPoint, center: CGPoint,
-                                    card: DashCard, date: Date) {
+    /// Full glowing spine from a card edge to the inverter; |W|-scaled width + dots.
+    private func drawSpine(ctx: GraphicsContext, cardEdge: CGPoint, center: CGPoint,
+                           node: DashNode, tier: Tier, date: Date) {
         let s = cardEdge
         let e = edgePoint(from: center, to: cardEdge, radius: invR)
         let radial = unit(dx: cardEdge.x - center.x, dy: cardEdge.y - center.y)
         let span = hypot(e.x - s.x, e.y - s.y)
-        let c1 = CGPoint(x: s.x + (e.x - s.x) * 0.5, y: s.y)          // horizontal leave
-        let c2 = CGPoint(x: e.x + radial.dx * span * 0.4,            // radial ease-in
-                         y: e.y + radial.dy * span * 0.4)
+        let c1 = CGPoint(x: s.x + (e.x - s.x) * 0.5, y: s.y)
+        let c2 = CGPoint(x: e.x + radial.dx * span * 0.4, y: e.y + radial.dy * span * 0.4)
 
-        let frac = min(1.0, card.watts / 3000.0)
-        let active = card.active && card.dir != .none
+        let active = poller.activeNodes.contains(node.kind) && tier != .idle
+        let color = active ? node.semantic : Semantic.idle
+        let frac = min(1.0, node.magnitude / 3000.0)
         let width = active ? (1.5 + 2.5 * frac) : 1.0
 
         var path = Path()
         path.move(to: s)
         path.addCurve(to: e, control1: c1, control2: c2)
         ctx.stroke(path,
-                   with: .color(active ? card.color.opacity(0.6) : Color.white.opacity(0.08)),
+                   with: .color(active ? color.opacity(0.65) : Color.white.opacity(0.07)),
                    style: StrokeStyle(lineWidth: sc(width), lineCap: .round))
 
         guard active else { return }
@@ -337,12 +439,12 @@ struct FlowView: View {
         for i in 0..<dotCount {
             let phase = (base + Double(i) / Double(dotCount)).truncatingRemainder(dividingBy: 1.0)
             let travel = 0.08 + phase * 0.84
-            let u = card.dir == .toInverter ? travel : (1.0 - travel)
+            let u = node.feeding ? travel : (1.0 - travel)   // feeding = node -> inverter
             let pt = cubicPoint(CGFloat(u), s, c1, c2, e)
             let dot = Path(ellipseIn: CGRect(x: pt.x - r, y: pt.y - r, width: r * 2, height: r * 2))
             ctx.drawLayer { layer in
-                layer.addFilter(.shadow(color: card.color.opacity(0.9), radius: sc(3)))
-                layer.fill(dot, with: .color(card.color))
+                layer.addFilter(.shadow(color: color.opacity(0.9), radius: sc(3)))
+                layer.fill(dot, with: .color(color))
             }
         }
     }
