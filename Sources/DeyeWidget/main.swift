@@ -27,6 +27,51 @@ func runMigrationCheck() -> Int32 {
     return ok ? 0 : 1
 }
 
+// MARK: - Menu mapping self-test (--menucheck)
+
+func runMenuCheck() -> Int32 {
+    MainActor.assumeIsolated {
+        print("=== Menu item mapping self-test ===")
+        var pass = true
+        func check(_ label: String, _ got: String, _ want: String) {
+            let ok = got == want
+            pass = pass && ok
+            let padLabel = label.padding(toLength: 22, withPad: " ", startingAt: 0)
+            print("  \(padLabel) got=\(got.padding(toLength: 10, withPad: " ", startingAt: 0)) want=\(want.padding(toLength: 10, withPad: " ", startingAt: 0)) \(ok ? "PASS" : "FAIL")")
+        }
+        let s = Settings.shared
+        // Drive each Size item's handler effect and assert the resulting setting.
+        for preset in SizePreset.allCases {
+            let item = NSMenuItem()
+            item.representedObject = preset.rawValue          // exactly as buildMenu sets it
+            if let p = StatusBarController.size(from: item) { s.scale = Double(p.scale) }
+            let want = preset == .small ? 0.72 : (preset == .medium ? 1.0 : 1.15)
+            check("Size→\(preset.title)", String(format: "%.2f", s.scale), String(format: "%.2f", want))
+        }
+        // Drive each Display item's handler effect and assert the resulting setting.
+        for mode in DisplayMode.allCases {
+            let item = NSMenuItem()
+            item.representedObject = mode.rawValue
+            if let m = StatusBarController.display(from: item) { s.displayMode = m }
+            check("Display→\(mode.title)", s.displayMode.rawValue, mode.rawValue)
+        }
+        // @Published delivery timing — the actual bug. The publisher emits in
+        // willSet, so reading the property back is stale; the delivered value is
+        // correct. Prove the delivered value (what WidgetWindow now uses) is new.
+        s.scale = 1.15
+        var delivered = -1.0
+        var readBack = -1.0
+        let c = s.$scale.dropFirst().sink { newVal in delivered = newVal; readBack = s.scale }
+        s.scale = 0.72
+        _ = c
+        print("  --- @Published delivery (scale 1.15 → 0.72) ---")
+        check("delivered value", String(format: "%.2f", delivered), "0.72")
+        print(String(format: "  read-back inside sink = %.2f (stale willSet value — the old bug)", readBack))
+        print(pass ? "ALL PASS" : "FAIL")
+        return pass ? 0 : 1
+    }
+}
+
 // MARK: - CLI dump mode (no GUI)
 
 func runDump() -> Int32 {
@@ -119,6 +164,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 if CommandLine.arguments.contains("--migrationcheck") {
     exit(runMigrationCheck())
+}
+if CommandLine.arguments.contains("--menucheck") {
+    exit(runMenuCheck())
 }
 if CommandLine.arguments.contains("--dump") {
     exit(runDump())

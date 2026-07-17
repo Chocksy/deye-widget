@@ -1,6 +1,21 @@
 import Foundation
 import SwiftUI
 
+/// App version info, read from the bundle Info.plist. Falls back to "dev" when
+/// running the bare SPM binary (no bundle).
+enum AppInfo {
+    static var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+    }
+    static var build: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
+    }
+    /// e.g. "1.1.0 (1)" or "dev".
+    static var display: String {
+        version == "dev" ? "dev" : "\(version) (\(build))"
+    }
+}
+
 /// Widget size presets. Medium is the native design at scale 1.0.
 enum SizePreset: String, CaseIterable {
     case small, medium, large
@@ -211,6 +226,9 @@ struct SettingsView: View {
             .textFieldStyle(.roundedBorder)
 
             HStack {
+                Text("Version \(AppInfo.display)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
                 Spacer()
                 Button("Cancel") { onDone() }
                 Button("Save") { save() }

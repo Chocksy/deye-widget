@@ -44,8 +44,24 @@ final class StatusBarController {
             .store(in: &cancellables)
     }
 
+    /// Resolve a menu item's represented enum back to the value to apply. Pure
+    /// and positional-logic-free (reads only representedObject).
+    static func size(from item: NSMenuItem) -> SizePreset? {
+        (item.representedObject as? String).flatMap(SizePreset.init(rawValue:))
+    }
+    static func display(from item: NSMenuItem) -> DisplayMode? {
+        (item.representedObject as? String).flatMap(DisplayMode.init(rawValue:))
+    }
+
     private func buildMenu() {
         let menu = NSMenu()
+
+        // App name + version (disabled).
+        let versionItem = NSMenuItem(title: "DeyeWidget \(AppInfo.version)", action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false
+        menu.addItem(versionItem)
+        menu.addItem(.separator())
+
         menu.addItem(loadItem)
         menu.addItem(solarItem)
         menu.addItem(gridItem)
@@ -134,8 +150,7 @@ final class StatusBarController {
     }
 
     @objc private func selectSize(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let preset = SizePreset(rawValue: raw) else { return }
+        guard let preset = Self.size(from: sender) else { return }
         settings.scale = Double(preset.scale)   // WidgetWindow applies live
     }
 
@@ -147,8 +162,7 @@ final class StatusBarController {
     }
 
     @objc private func selectDisplay(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let mode = DisplayMode(rawValue: raw) else { return }
+        guard let mode = Self.display(from: sender) else { return }
         settings.displayMode = mode             // WidgetWindow applies live
         for (m, item) in displayItems {
             item.state = (m == mode) ? .on : .off

@@ -97,25 +97,31 @@ final class WidgetWindow: NSWindow {
         if frame.origin == .zero {
             center()
         }
-        applyConfig()  // apply persisted scale + display mode on launch
+        applyConfig(scale: CGFloat(settings.scale), mode: settings.displayMode)  // launch
 
-        // Live-apply when scale (menu presets or the Settings slider) or the
-        // display mode changes, without needing a manual trigger.
+        // Live-apply on change. IMPORTANT: @Published emits in willSet (before
+        // the stored value commits), so we must use the value DELIVERED by the
+        // publisher — never read settings.scale/displayMode back inside the sink,
+        // which would still hold the OLD value and re-apply the previous config.
         settings.$scale.dropFirst().removeDuplicates()
-            .sink { [weak self] _ in self?.applyConfig() }
+            .sink { [weak self] newScale in
+                guard let self else { return }
+                self.applyConfig(scale: CGFloat(newScale), mode: self.settings.displayMode)
+            }
             .store(in: &cancellables)
         settings.$displayMode.dropFirst().removeDuplicates()
-            .sink { [weak self] _ in self?.applyConfig() }
+            .sink { [weak self] newMode in
+                guard let self else { return }
+                self.applyConfig(scale: CGFloat(self.settings.scale), mode: newMode)
+            }
             .store(in: &cancellables)
     }
 
-    /// Rebuild the content for the current scale + display mode, resizing the
+    /// Rebuild the content for the given scale + display mode, resizing the
     /// window while keeping the top-left corner fixed so it doesn't jump. Text
     /// stays crisp (FlowView is parameterized, not rasterized). The 28 pt corner
     /// radius stays fixed via the resizable mask.
-    func applyConfig() {
-        let scale = CGFloat(settings.scale)
-        let mode = settings.displayMode
+    func applyConfig(scale: CGFloat, mode: DisplayMode) {
         hosting.rootView = FlowView(poller: poller, settings: settings,
                                     displayMode: mode, scale: scale)
 
