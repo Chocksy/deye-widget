@@ -53,10 +53,14 @@ final class Settings: ObservableObject {
         static let loggerSerial = "loggerSerial"
         static let slaveId = "slaveId"
         static let pollInterval = "pollInterval"
-        static let sizePreset = "sizePreset"
+        static let sizePreset = "sizePreset"    // legacy (migrated to scale)
+        static let scale = "scale"
         static let showChart = "showChart"      // legacy (migrated to displayMode)
         static let displayMode = "displayMode"
     }
+
+    /// Allowed free-scale range (60%–130%).
+    static let scaleRange: ClosedRange<Double> = 0.6...1.3
 
     @Published var host: String {
         didSet { defaults.set(host, forKey: Keys.host) }
@@ -73,8 +77,14 @@ final class Settings: ObservableObject {
     @Published var pollInterval: Double {
         didSet { defaults.set(pollInterval, forKey: Keys.pollInterval) }
     }
-    @Published var sizePreset: SizePreset {
-        didSet { defaults.set(sizePreset.rawValue, forKey: Keys.sizePreset) }
+    /// Free scale multiplier (raw, 0.6–1.3). Size-menu presets are shortcuts
+    /// that set this; the Settings slider sets it directly. Live-applied.
+    @Published var scale: Double {
+        didSet {
+            let clamped = min(max(scale, Settings.scaleRange.lowerBound), Settings.scaleRange.upperBound)
+            if clamped != scale { scale = clamped; return }
+            defaults.set(scale, forKey: Keys.scale)
+        }
     }
     @Published var displayMode: DisplayMode {
         didSet { defaults.set(displayMode.rawValue, forKey: Keys.displayMode) }
@@ -101,7 +111,16 @@ final class Settings: ObservableObject {
         slaveId = sl > 0 ? UInt8(sl) : 1
         let pi = defaults.double(forKey: Keys.pollInterval)
         pollInterval = pi > 0 ? pi : 5.0
-        sizePreset = (defaults.string(forKey: Keys.sizePreset)).flatMap { SizePreset(rawValue: $0) } ?? .medium
+        // Free scale: use the raw value if present, else migrate the legacy size
+        // preset, else default to 100%.
+        if defaults.object(forKey: Keys.scale) != nil {
+            let raw = defaults.double(forKey: Keys.scale)
+            scale = min(max(raw, Settings.scaleRange.lowerBound), Settings.scaleRange.upperBound)
+        } else if let sp = (defaults.string(forKey: Keys.sizePreset)).flatMap({ SizePreset(rawValue: $0) }) {
+            scale = Double(sp.scale)
+        } else {
+            scale = 1.0
+        }
         // Migrate the old boolean showChart into the new three-way displayMode.
         if let raw = defaults.string(forKey: Keys.displayMode), let m = DisplayMode(rawValue: raw) {
             displayMode = m
@@ -128,6 +147,7 @@ final class Settings: ObservableObject {
         let sl = legacy.integer(forKey: Keys.slaveId); if sl > 0 { std.set(sl, forKey: Keys.slaveId) }
         let pi = legacy.double(forKey: Keys.pollInterval); if pi > 0 { std.set(pi, forKey: Keys.pollInterval) }
         if let sp = legacy.string(forKey: Keys.sizePreset) { std.set(sp, forKey: Keys.sizePreset) }
+        if legacy.object(forKey: Keys.scale) != nil { std.set(legacy.double(forKey: Keys.scale), forKey: Keys.scale) }
         if let dm = legacy.string(forKey: Keys.displayMode) { std.set(dm, forKey: Keys.displayMode) }
         if let show = legacy.object(forKey: Keys.showChart) as? Bool { std.set(show, forKey: Keys.showChart) }
     }
@@ -174,6 +194,18 @@ struct SettingsView: View {
                     Text("Poll interval (s)")
                     TextField("5", text: $intervalText)
                         .frame(width: 200)
+                }
+                GridRow {
+                    Text("Scale")
+                    HStack(spacing: 8) {
+                        Slider(value: $settings.scale,
+                               in: Settings.scaleRange, step: 0.05)
+                        Text("\(Int((settings.scale * 100).rounded()))%")
+                            .font(.system(.body, design: .rounded))
+                            .monospacedDigit()
+                            .frame(width: 40, alignment: .trailing)
+                    }
+                    .frame(width: 200)
                 }
             }
             .textFieldStyle(.roundedBorder)

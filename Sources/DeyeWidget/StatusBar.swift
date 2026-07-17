@@ -10,10 +10,6 @@ final class StatusBarController {
     private let settings: Settings
     private var cancellables = Set<AnyCancellable>()
 
-    /// Invoked when size preset or chart visibility changes; wired to
-    /// WidgetWindow.applyConfig.
-    var onConfigChange: (() -> Void)?
-
     private var settingsWindow: NSWindow?
     private var sizeItems: [SizePreset: NSMenuItem] = [:]
     private var displayItems: [DisplayMode: NSMenuItem] = [:]
@@ -39,6 +35,12 @@ final class StatusBarController {
         poller.$data
             .combineLatest(poller.$connected)
             .sink { [weak self] _, _ in self?.refreshUI() }
+            .store(in: &cancellables)
+
+        // Keep the Size preset checkmarks in sync when the scale changes (menu
+        // or the Settings slider).
+        settings.$scale
+            .sink { [weak self] s in self?.refreshSizeChecks(scale: s) }
             .store(in: &cancellables)
     }
 
@@ -68,19 +70,19 @@ final class StatusBarController {
         displayItem.submenu = displayMenu
         menu.addItem(displayItem)
 
-        // Size submenu.
+        // Size submenu — presets are shortcuts that set the free scale.
         let sizeItem = NSMenuItem(title: "Size", action: nil, keyEquivalent: "")
         let sizeMenu = NSMenu()
         for preset in SizePreset.allCases {
             let item = NSMenuItem(title: preset.title, action: #selector(selectSize(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = preset.rawValue
-            item.state = (settings.sizePreset == preset) ? .on : .off
             sizeMenu.addItem(item)
             sizeItems[preset] = item
         }
         sizeItem.submenu = sizeMenu
         menu.addItem(sizeItem)
+        refreshSizeChecks(scale: settings.scale)
 
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
@@ -134,21 +136,23 @@ final class StatusBarController {
     @objc private func selectSize(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let preset = SizePreset(rawValue: raw) else { return }
-        settings.sizePreset = preset
+        settings.scale = Double(preset.scale)   // WidgetWindow applies live
+    }
+
+    /// Check the preset whose scale matches the current value (none if custom).
+    private func refreshSizeChecks(scale: Double) {
         for (p, item) in sizeItems {
-            item.state = (p == preset) ? .on : .off
+            item.state = abs(Double(p.scale) - scale) < 0.005 ? .on : .off
         }
-        onConfigChange?()
     }
 
     @objc private func selectDisplay(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let mode = DisplayMode(rawValue: raw) else { return }
-        settings.displayMode = mode
+        settings.displayMode = mode             // WidgetWindow applies live
         for (m, item) in displayItems {
             item.state = (m == mode) ? .on : .off
         }
-        onConfigChange?()
     }
 
     @objc private func openSettings() {

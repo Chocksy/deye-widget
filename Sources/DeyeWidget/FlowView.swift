@@ -226,31 +226,27 @@ struct FlowView: View {
         }
     }
 
-    private func gap(_ a: Tier, _ b: Tier) -> CGFloat {
-        if a == .idle && b == .idle { return sc(4) }   // idle rows cluster tighter
-        if a == .idle || b == .idle { return sc(6) }
-        return sc(10)
-    }
-
-    /// Vertically-centered column layout; auto-scales heights so it never
-    /// overflows `availH`. Returns per-node (height, centerY).
+    /// Fluid column layout: top-aligned start, items distributed across the FULL
+    /// height with equal flexible gaps (no centering, no dead zones). Heights
+    /// auto-scale down if content + minimum gaps would overflow. Returns
+    /// per-node (height, centerY).
     private func columnLayout(_ tiers: [Tier], availH: CGFloat) -> [(h: CGFloat, cy: CGFloat)] {
         var heights = tiers.map { tierHeight($0) }
-        var gaps: [CGFloat] = []
-        if tiers.count > 1 { for i in 1..<tiers.count { gaps.append(gap(tiers[i - 1], tiers[i])) } }
-        var total = heights.reduce(0, +) + gaps.reduce(0, +)
-        if total > availH && total > 0 {
-            let f = availH / total
+        let n = heights.count
+        let minGap = sc(8)
+        let gapSpan = CGFloat(max(0, n - 1)) * minGap
+        let sumH = heights.reduce(0, +)
+        if sumH + gapSpan > availH && sumH > 0 {
+            let f = max(availH - gapSpan, 1) / sumH
             heights = heights.map { $0 * f }
-            gaps = gaps.map { $0 * f }
-            total = availH
         }
+        let newSum = heights.reduce(0, +)
+        let gap = n > 1 ? max(minGap, (availH - newSum) / CGFloat(n - 1)) : 0
         var result: [(CGFloat, CGFloat)] = []
-        var y = (availH - total) / 2
+        var y: CGFloat = 0
         for i in heights.indices {
-            if i > 0 { y += gaps[i - 1] }
             result.append((heights[i], y + heights[i] / 2))
-            y += heights[i]
+            y += heights[i] + gap
         }
         return result
     }
@@ -276,7 +272,7 @@ struct FlowView: View {
             let w = geo.size.width
             let h = geo.size.height
             let outer = sc(20)
-            let corridor = sc(150)
+            let corridor = sc(110)   // tighter corridor -> wider cards (~235pt @1x)
             let colW = (w - 2 * outer - corridor) / 2
             let leftCX = outer + colW / 2
             let rightCX = w - outer - colW / 2
@@ -397,7 +393,7 @@ struct FlowView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .padding(.horizontal, sc(14))
+        .padding(.horizontal, sc(16))
         .padding(.vertical, sc(12))
         .background(
             RoundedRectangle(cornerRadius: sc(16), style: .continuous)

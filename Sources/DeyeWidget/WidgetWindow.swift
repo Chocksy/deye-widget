@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 /// Transparent overlay that turns the whole widget surface into a drag handle.
 /// The window content is non-interactive, so catching every click for dragging
@@ -23,13 +24,14 @@ final class WidgetWindow: NSWindow {
     private let poller: DataPoller
     private let settings: Settings
     private let hosting: NSHostingView<FlowView>
+    private var cancellables = Set<AnyCancellable>()
 
     init(poller: DataPoller, settings: Settings) {
         self.poller = poller
         self.settings = settings
         self.hosting = NSHostingView(
             rootView: FlowView(poller: poller, settings: settings,
-                               displayMode: settings.displayMode, scale: settings.sizePreset.scale)
+                               displayMode: settings.displayMode, scale: CGFloat(settings.scale))
         )
 
         super.init(
@@ -95,15 +97,24 @@ final class WidgetWindow: NSWindow {
         if frame.origin == .zero {
             center()
         }
-        applyConfig()  // apply persisted size preset + chart visibility on launch
+        applyConfig()  // apply persisted scale + display mode on launch
+
+        // Live-apply when scale (menu presets or the Settings slider) or the
+        // display mode changes, without needing a manual trigger.
+        settings.$scale.dropFirst().removeDuplicates()
+            .sink { [weak self] _ in self?.applyConfig() }
+            .store(in: &cancellables)
+        settings.$displayMode.dropFirst().removeDuplicates()
+            .sink { [weak self] _ in self?.applyConfig() }
+            .store(in: &cancellables)
     }
 
-    /// Rebuild the content for the current size preset and chart visibility,
-    /// resizing the window while keeping the top-left corner fixed so it doesn't
-    /// jump. Text stays crisp (FlowView is parameterized, not rasterized). The
-    /// 28 pt corner radius stays fixed via the resizable mask.
+    /// Rebuild the content for the current scale + display mode, resizing the
+    /// window while keeping the top-left corner fixed so it doesn't jump. Text
+    /// stays crisp (FlowView is parameterized, not rasterized). The 28 pt corner
+    /// radius stays fixed via the resizable mask.
     func applyConfig() {
-        let scale = settings.sizePreset.scale
+        let scale = CGFloat(settings.scale)
         let mode = settings.displayMode
         hosting.rootView = FlowView(poller: poller, settings: settings,
                                     displayMode: mode, scale: scale)

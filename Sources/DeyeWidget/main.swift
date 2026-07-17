@@ -80,7 +80,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.orderFrontRegardless()
 
         statusBar = StatusBarController(poller: poller, settings: settings)
-        statusBar.onConfigChange = { [weak window] in window?.applyConfig() }
 
         poller.start()
     }
