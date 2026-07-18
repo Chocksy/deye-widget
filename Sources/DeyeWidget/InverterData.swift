@@ -152,10 +152,23 @@ final class DataPoller: ObservableObject {
     private let engine: PollEngine
     private var task: Task<Void, Never>?
     private let settings: Settings
+    private let store: HistoryStore?
+    private var pruneTimer: Timer?
 
     init(settings: Settings) {
         self.settings = settings
         self.engine = PollEngine()
+        self.store = HistoryStore()
+        // Seed the in-memory chart from disk so the Power Profile pane is full
+        // immediately after a relaunch instead of drawing from an empty buffer.
+        if let seed = store?.recentSamples(minutes: 60), !seed.isEmpty {
+            history = Array(seed.suffix(maxHistory))
+        }
+        // Prune the rolling window once now (HistoryStore did it at open too) and
+        // hourly thereafter; 5-day retention keeps the DB ~15 MB at most.
+        pruneTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            self?.store?.prune()
+        }
     }
 
     func start() {
@@ -205,6 +218,7 @@ final class DataPoller: ObservableObject {
             self.lastUpdate = Date()
             self.lastError = nil
             appendHistory(d)
+            store?.record(d)
             updateTiers(d)
         case .failure(let err):
             self.connected = false

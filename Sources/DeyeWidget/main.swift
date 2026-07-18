@@ -126,6 +126,71 @@ func runDump() -> Int32 {
     }
 }
 
+// MARK: - History CLI (--history / --gaps), DB-only, no socket
+
+/// Parse a duration like "24h", "5d", "90m", "45s" into seconds. Bare number = seconds.
+func parseDuration(_ s: String) -> Int? {
+    guard let last = s.last else { return nil }
+    let units: [Character: Int] = ["s": 1, "m": 60, "h": 3600, "d": 86_400]
+    if let mult = units[last] {
+        guard let n = Int(s.dropLast()) else { return nil }
+        return n * mult
+    }
+    return Int(s)   // bare seconds
+}
+
+/// ISO8601 in LOCAL time (the user was bitten by a UTC export) e.g. 2026-07-18T14:30:05+03:00.
+private let localISO: DateFormatter = {
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.timeZone = .current
+    f.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZZZZZ"
+    return f
+}()
+
+func runHistory(_ durArg: String) -> Int32 {
+    guard let secs = parseDuration(durArg) else {
+        FileHandle.standardError.write("bad duration '\(durArg)' (use e.g. 24h, 5d, 90m)\n".data(using: .utf8)!)
+        return 2
+    }
+    guard let store = HistoryStore(readOnly: true) else { return 1 }
+    print("ts,house,mi,pv,battery,grid,soc,grid_v,freq,temp,batt_v")
+    for r in store.rows(sinceSecondsAgo: secs) {
+        let t = localISO.string(from: Date(timeIntervalSince1970: Double(r.ts)))
+        print(String(format: "%@,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.1f,%.2f,%.1f,%.2f",
+                     t, r.house, r.mi, r.pv, r.battery, r.grid, r.soc, r.gridV, r.freq, r.temp, r.battV))
+    }
+    return 0
+}
+
+func runGaps(_ durArg: String) -> Int32 {
+    guard let secs = parseDuration(durArg) else {
+        FileHandle.standardError.write("bad duration '\(durArg)' (use e.g. 24h, 5d, 90m)\n".data(using: .utf8)!)
+        return 2
+    }
+    guard let store = HistoryStore(readOnly: true) else { return 1 }
+    let rows = store.rows(sinceSecondsAgo: secs)
+    // Rows exist only for successful polls; a jump > 15 s between consecutive
+    // timestamps is an outage (logger/grid unreachable) — that's the record.
+    let gapFloor = 15
+    print("gap_start,gap_end,length")
+    var found = 0
+    for i in 1..<max(rows.count, 1) {
+        let prev = rows[i - 1].ts, cur = rows[i].ts
+        let delta = Int(cur - prev)
+        if delta > gapFloor {
+            found += 1
+            let start = localISO.string(from: Date(timeIntervalSince1970: Double(prev)))
+            let end = localISO.string(from: Date(timeIntervalSince1970: Double(cur)))
+            let mins = delta / 60, rem = delta % 60
+            let len = mins > 0 ? "\(mins)m\(rem)s" : "\(rem)s"
+            print("\(start),\(end),\(len)")
+        }
+    }
+    FileHandle.standardError.write("\(found) gap(s) > \(gapFloor)s in \(rows.count) samples\n".data(using: .utf8)!)
+    return 0
+}
+
 // MARK: - App delegate
 
 @MainActor
@@ -170,6 +235,12 @@ if CommandLine.arguments.contains("--menucheck") {
 }
 if CommandLine.arguments.contains("--dump") {
     exit(runDump())
+}
+if let i = CommandLine.arguments.firstIndex(of: "--history") {
+    exit(runHistory(CommandLine.arguments.count > i + 1 ? CommandLine.arguments[i + 1] : "60m"))
+}
+if let i = CommandLine.arguments.firstIndex(of: "--gaps") {
+    exit(runGaps(CommandLine.arguments.count > i + 1 ? CommandLine.arguments[i + 1] : "1h"))
 }
 
 MainActor.assumeIsolated {
