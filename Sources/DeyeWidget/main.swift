@@ -27,6 +27,35 @@ func runMigrationCheck() -> Int32 {
     return ok ? 0 : 1
 }
 
+// MARK: - Pin placement self-test (--pintest)
+
+func runPinTest() -> Int32 {
+    MainActor.assumeIsolated {
+        print("=== Pin placement self-test ===")
+        var pass = true
+        // Wokyis: frame (1600,-540 960x540), window 510x300.
+        let sf = NSRect(x: 1600, y: -540, width: 960, height: 540)
+        let w = NSSize(width: 510, height: 300)
+        func check(_ label: String, _ got: NSPoint, _ want: NSPoint) {
+            let ok = abs(got.x - want.x) < 0.5 && abs(got.y - want.y) < 0.5
+            pass = pass && ok
+            print("  \(label.padding(toLength: 26, withPad: " ", startingAt: 0)) got=(\(Int(got.x)),\(Int(got.y))) want=(\(Int(want.x)),\(Int(want.y))) \(ok ? "PASS" : "FAIL")")
+        }
+        // flush-right centered (relX=1, relY=0.5): x = 1600+450=2050, y = -540+120=-420
+        check("flush-right centered", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: w, relX: 1.0, relY: 0.5), NSPoint(x: 2050, y: -420))
+        // flush bottom-left (0,0)
+        check("flush bottom-left", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: w, relX: 0, relY: 0), NSPoint(x: 1600, y: -540))
+        // flush top-right (1,1): x=2050, y=-540+240=-300
+        check("flush top-right", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: w, relX: 1, relY: 1), NSPoint(x: 2050, y: -300))
+        // out-of-range clamps to [0,1]
+        check("clamp rel > 1", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: w, relX: 5, relY: -2), NSPoint(x: 2050, y: -540))
+        // window larger than screen -> origin at screen origin (no negative offset)
+        check("oversize window", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: NSSize(width: 2000, height: 800), relX: 0.5, relY: 0.5), NSPoint(x: 1600, y: -540))
+        print(pass ? "ALL PASS" : "FAIL")
+        return pass ? 0 : 1
+    }
+}
+
 // MARK: - Menu mapping self-test (--menucheck)
 
 func runMenuCheck() -> Int32 {
@@ -123,6 +152,23 @@ func runDump() -> Int32 {
         client.close()
         FileHandle.standardError.write("dump failed: \(error)\n".data(using: .utf8)!)
         return 1
+    }
+}
+
+// MARK: - Screens CLI (--screens)
+
+/// List attached screens: name, displayID, and frame — used to pick a pin target
+/// and to verify placement.
+func runScreens() -> Int32 {
+    MainActor.assumeIsolated {
+        print("=== DeyeWidget --screens ===")
+        for s in NSScreen.screens {
+            let f = s.frame
+            let id = WidgetWindow.displayID(of: s)
+            print(String(format: "%-20@ id=%u  frame=(%.0f,%.0f %.0fx%.0f)",
+                         s.localizedName as NSString, id, f.origin.x, f.origin.y, f.width, f.height))
+        }
+        return 0
     }
 }
 
@@ -258,11 +304,17 @@ if CommandLine.arguments.contains("--migrationcheck") {
 if CommandLine.arguments.contains("--menucheck") {
     exit(runMenuCheck())
 }
+if CommandLine.arguments.contains("--pintest") {
+    exit(runPinTest())
+}
 if CommandLine.arguments.contains("--dump") {
     exit(runDump())
 }
 if CommandLine.arguments.contains("--discover") {
     exit(runDiscover())
+}
+if CommandLine.arguments.contains("--screens") {
+    exit(runScreens())
 }
 if let i = CommandLine.arguments.firstIndex(of: "--history") {
     exit(runHistory(CommandLine.arguments.count > i + 1 ? CommandLine.arguments[i + 1] : "60m"))

@@ -25,6 +25,9 @@ final class WidgetWindow: NSWindow {
     private let settings: Settings
     private let hosting: NSHostingView<FlowView>
     private var cancellables = Set<AnyCancellable>()
+    /// True while we move the window programmatically, so windowDidMove doesn't
+    /// mistake an enforcement move for a manual drag and re-save the position.
+    private var isEnforcing = false
 
     init(poller: DataPoller, settings: Settings) {
         self.poller = poller
@@ -115,6 +118,93 @@ final class WidgetWindow: NSWindow {
                 self.applyConfig(scale: CGFloat(self.settings.scale), mode: newMode)
             }
             .store(in: &cancellables)
+
+        // Pin-to-display: when the user selects a screen, snapshot the current
+        // position relative to it, then enforce.
+        settings.$pinnedScreenName.dropFirst().removeDuplicates()
+            .sink { [weak self] name in self?.handlePinSelection(name) }
+            .store(in: &cancellables)
+
+        // Re-enforce the pin whenever the display arrangement changes or the Mac
+        // wakes — this is when a window drifts off an (un)plugged screen.
+        delegate = self
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(screensChanged),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(screensChanged),
+            name: NSWorkspace.didWakeNotification, object: nil)
+
+        enforcePin()   // land on the pinned screen at launch
+    }
+
+    // MARK: - Pin to display
+
+    /// The pinned NSScreen if present, matched by name (primary) or displayID
+    /// (fallback). Returns nil when unpinned or the screen is absent.
+    private func pinnedScreen() -> NSScreen? {
+        guard !settings.pinnedScreenName.isEmpty else { return nil }
+        if let s = NSScreen.screens.first(where: { $0.localizedName == settings.pinnedScreenName }) {
+            return s
+        }
+        if settings.pinnedDisplayID != 0 {
+            return NSScreen.screens.first { Self.displayID(of: $0) == CGDirectDisplayID(settings.pinnedDisplayID) }
+        }
+        return nil
+    }
+
+    static func displayID(of screen: NSScreen) -> CGDirectDisplayID {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    }
+
+    /// Move the window to the saved relative position on the pinned screen if it
+    /// isn't already there. No-op when unpinned or the screen is absent (leave the
+    /// window wherever macOS put it; it re-places when the screen returns).
+    func enforcePin() {
+        guard let screen = pinnedScreen() else { return }
+        let desired = Self.desiredOrigin(screenFrame: screen.frame, windowSize: frame.size,
+                                         relX: settings.pinnedRelX, relY: settings.pinnedRelY)
+        if abs(frame.origin.x - desired.x) > 1 || abs(frame.origin.y - desired.y) > 1 {
+            isEnforcing = true
+            setFrameOrigin(desired)
+            isEnforcing = false
+        }
+    }
+
+    /// Pure placement math: window origin for `relX/relY` (0=flush left/bottom,
+    /// 1=flush right/top, 0.5=centered) within a screen's placeable area. Clamped
+    /// so the window stays fully on-screen.
+    static func desiredOrigin(screenFrame sf: NSRect, windowSize w: NSSize,
+                              relX: Double, relY: Double) -> NSPoint {
+        let rx = min(max(relX, 0), 1)
+        let ry = min(max(relY, 0), 1)
+        let x = sf.origin.x + CGFloat(rx) * max(sf.width - w.width, 0)
+        let y = sf.origin.y + CGFloat(ry) * max(sf.height - w.height, 0)
+        return NSPoint(x: x.rounded(), y: y.rounded())
+    }
+
+    /// Save the window's current origin normalised within a screen's placeable
+    /// area (see Settings.pinnedRelX/Y).
+    private func saveRelative(on screen: NSScreen) {
+        let sf = screen.frame
+        let w = frame.size
+        let denomX = sf.width - w.width
+        let denomY = sf.height - w.height
+        let relX = denomX > 0 ? (frame.origin.x - sf.origin.x) / denomX : 0
+        let relY = denomY > 0 ? (frame.origin.y - sf.origin.y) / denomY : 0
+        settings.pinnedRelX = min(max(relX, 0), 1)
+        settings.pinnedRelY = min(max(relY, 0), 1)
+    }
+
+    private func handlePinSelection(_ name: String) {
+        guard !name.isEmpty, let screen = pinnedScreen() else { return }
+        saveRelative(on: screen)   // remember where it is on the newly-pinned screen
+        enforcePin()
+    }
+
+    @objc private func screensChanged() {
+        // Defer one runloop turn so NSScreen.screens reflects the new arrangement.
+        DispatchQueue.main.async { [weak self] in self?.enforcePin() }
     }
 
     /// Rebuild the content for the given scale + display mode, resizing the
@@ -132,6 +222,7 @@ final class WidgetWindow: NSWindow {
         let newOrigin = NSPoint(x: old.origin.x, y: topLeftY - newSize.height)
         setFrame(NSRect(origin: newOrigin, size: newSize), display: true, animate: false)
         invalidateShadow()
+        enforcePin()   // a resize can push the window off the pinned screen
     }
 
     /// A resizable rounded-rect mask (black fill) with cap insets so it stretches
@@ -154,4 +245,16 @@ final class WidgetWindow: NSWindow {
     // window; being accessory means becoming key won't show a Dock icon.
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+}
+
+extension WidgetWindow: NSWindowDelegate {
+    /// A manual drag that lands on the pinned screen updates the saved position;
+    /// a drag onto another screen is temporary (it snaps back on the next
+    /// screen-change or resize event).
+    func windowDidMove(_ notification: Notification) {
+        guard !isEnforcing, let screen = pinnedScreen(), let current = self.screen else { return }
+        if Self.displayID(of: screen) == Self.displayID(of: current) {
+            saveRelative(on: screen)
+        }
+    }
 }

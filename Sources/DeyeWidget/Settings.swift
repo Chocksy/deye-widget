@@ -73,6 +73,10 @@ final class Settings: ObservableObject {
         static let scale = "scale"
         static let showChart = "showChart"      // legacy (migrated to displayMode)
         static let displayMode = "displayMode"
+        static let pinnedScreen = "pinnedScreen"
+        static let pinnedDisplayID = "pinnedDisplayID"
+        static let pinnedRelX = "pinnedRelX"
+        static let pinnedRelY = "pinnedRelY"
     }
 
     /// Allowed free-scale range (60%–130%).
@@ -110,6 +114,25 @@ final class Settings: ObservableObject {
     }
     @Published var displayMode: DisplayMode {
         didSet { defaults.set(displayMode.rawValue, forKey: Keys.displayMode) }
+    }
+
+    /// Pin-to-display. Empty name = free (unpinned). The window is kept on the
+    /// screen with this localizedName; `pinnedDisplayID` is a secondary hint used
+    /// only if the name no longer matches. `pinnedRelX/Y` are the window origin
+    /// normalised within the screen's placeable area (0 = flush left/bottom,
+    /// 1 = flush right/top, 0.5 = centered) so the position survives resolution
+    /// changes and is independent of the window's own size.
+    @Published var pinnedScreenName: String {
+        didSet { defaults.set(pinnedScreenName, forKey: Keys.pinnedScreen) }
+    }
+    var pinnedDisplayID: Int {
+        didSet { defaults.set(pinnedDisplayID, forKey: Keys.pinnedDisplayID) }
+    }
+    var pinnedRelX: Double {
+        didSet { defaults.set(pinnedRelX, forKey: Keys.pinnedRelX) }
+    }
+    var pinnedRelY: Double {
+        didSet { defaults.set(pinnedRelY, forKey: Keys.pinnedRelY) }
     }
 
     /// Whether the logger connection is configured. Until the user sets a host
@@ -152,6 +175,10 @@ final class Settings: ObservableObject {
         } else {
             displayMode = .flowChart
         }
+        pinnedScreenName = defaults.string(forKey: Keys.pinnedScreen) ?? ""
+        pinnedDisplayID = defaults.integer(forKey: Keys.pinnedDisplayID)
+        pinnedRelX = defaults.object(forKey: Keys.pinnedRelX) as? Double ?? 1.0
+        pinnedRelY = defaults.object(forKey: Keys.pinnedRelY) as? Double ?? 0.5
     }
 
     /// One-time copy of settings from the legacy "DeyeWidget" defaults domain

@@ -4,7 +4,7 @@ import Combine
 
 /// Menu bar item: shows SOC and a snapshot menu.
 @MainActor
-final class StatusBarController {
+final class StatusBarController: NSObject {
     private let statusItem: NSStatusItem
     private let poller: DataPoller
     private let settings: Settings
@@ -13,6 +13,7 @@ final class StatusBarController {
     private var settingsWindow: NSWindow?
     private var sizeItems: [SizePreset: NSMenuItem] = [:]
     private var displayItems: [DisplayMode: NSMenuItem] = [:]
+    private let pinMenu = NSMenu()
 
     // Menu items whose titles we update each poll.
     private let loadItem = NSMenuItem(title: "Load: —", action: nil, keyEquivalent: "")
@@ -24,6 +25,7 @@ final class StatusBarController {
         self.poller = poller
         self.settings = settings
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        super.init()
 
         if let button = statusItem.button {
             button.attributedTitle = Self.title(soc: nil)
@@ -100,6 +102,13 @@ final class StatusBarController {
         menu.addItem(sizeItem)
         refreshSizeChecks(scale: settings.scale)
 
+        // Pin to Screen submenu — rebuilt on open (menuNeedsUpdate) so newly
+        // plugged/unplugged displays are reflected.
+        let pinItem = NSMenuItem(title: "Pin to Screen", action: nil, keyEquivalent: "")
+        pinMenu.delegate = self
+        pinItem.submenu = pinMenu
+        menu.addItem(pinItem)
+
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -169,6 +178,36 @@ final class StatusBarController {
         }
     }
 
+    /// Rebuild the Pin submenu: "None (free)" + one item per attached screen.
+    private func rebuildPinMenu() {
+        pinMenu.removeAllItems()
+        let none = NSMenuItem(title: "None (free)", action: #selector(selectPin(_:)), keyEquivalent: "")
+        none.target = self
+        none.representedObject = ""
+        none.state = settings.pinnedScreenName.isEmpty ? .on : .off
+        pinMenu.addItem(none)
+        pinMenu.addItem(.separator())
+        for screen in NSScreen.screens {
+            let name = screen.localizedName
+            let item = NSMenuItem(title: name, action: #selector(selectPin(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = name
+            item.state = (settings.pinnedScreenName == name) ? .on : .off
+            pinMenu.addItem(item)
+        }
+    }
+
+    @objc private func selectPin(_ sender: NSMenuItem) {
+        let name = (sender.representedObject as? String) ?? ""
+        if name.isEmpty {
+            settings.pinnedDisplayID = 0
+            settings.pinnedScreenName = ""       // WidgetWindow stops enforcing
+        } else if let screen = NSScreen.screens.first(where: { $0.localizedName == name }) {
+            settings.pinnedDisplayID = Int(WidgetWindow.displayID(of: screen))
+            settings.pinnedScreenName = name     // WidgetWindow snapshots + enforces
+        }
+    }
+
     @objc private func openSettings() {
         if let w = settingsWindow {
             w.makeKeyAndOrderFront(nil)
@@ -192,5 +231,11 @@ final class StatusBarController {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+}
+
+extension StatusBarController: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu === pinMenu { rebuildPinMenu() }
     }
 }
