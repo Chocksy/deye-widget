@@ -77,8 +77,11 @@ final class SolarmanClient {
                 continue
             }
 
-            // Blocking connect with socket-level timeouts applied afterwards.
-            if Foundation.connect(sock, node.pointee.ai_addr, node.pointee.ai_addrlen) == 0 {
+            // Connect with a bounded timeout (non-blocking connect + poll) so a
+            // dead/stale host fails in ~`timeout`s instead of hanging on the
+            // kernel's multi-minute TCP/ARP retry — this is what lets the poll
+            // loop rack up failures fast enough to trigger auto-rediscovery.
+            if connectWithTimeout(sock, node.pointee.ai_addr, node.pointee.ai_addrlen) {
                 fd = sock
                 applyTimeouts()
                 var one: Int32 = 1
@@ -90,6 +93,26 @@ final class SolarmanClient {
             ai = node.pointee.ai_next
         }
         throw SolarmanError.connectionFailed(lastErr)
+    }
+
+    /// Non-blocking connect bounded by `timeout`. Returns true on success. The
+    /// socket is left in blocking mode on return so the rest of the client (which
+    /// relies on SO_RCVTIMEO/SO_SNDTIMEO) is unaffected.
+    private func connectWithTimeout(_ sock: Int32, _ addr: UnsafeMutablePointer<sockaddr>, _ addrlen: socklen_t) -> Bool {
+        let flags = fcntl(sock, F_GETFL, 0)
+        _ = fcntl(sock, F_SETFL, flags | O_NONBLOCK)
+        defer { _ = fcntl(sock, F_SETFL, flags) }   // restore blocking
+
+        if Foundation.connect(sock, addr, addrlen) == 0 { return true }   // immediate
+        if errno != EINPROGRESS { return false }
+
+        var pfd = pollfd(fd: sock, events: Int16(POLLOUT), revents: 0)
+        guard poll(&pfd, 1, Int32(timeout * 1000)) > 0 else { return false }   // timeout/error
+
+        var soErr: Int32 = 0
+        var len = socklen_t(MemoryLayout<Int32>.size)
+        getsockopt(sock, SOL_SOCKET, SO_ERROR, &soErr, &len)
+        return soErr == 0
     }
 
     private func applyTimeouts() {

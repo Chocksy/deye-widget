@@ -126,6 +126,31 @@ func runDump() -> Int32 {
     }
 }
 
+// MARK: - Discovery CLI (--discover)
+
+/// Run one LAN discovery and print the result. Uses sockets: the broadcast path
+/// works even while the GUI holds the logger's single TCP socket, but the TCP
+/// sweep's V5 probe may fail against a busy logger — quit the GUI for that path.
+func runDiscover() -> Int32 {
+    let s = MainActor.assumeIsolated { Settings.shared }
+    let mac = MainActor.assumeIsolated { s.loggerMAC }
+    let serial = MainActor.assumeIsolated { s.loggerSerial }
+    let slave = MainActor.assumeIsolated { s.slaveId }
+    guard serial != 0 else {
+        FileHandle.standardError.write("not configured: set loggerSerial first\n".data(using: .utf8)!)
+        return 2
+    }
+    let subnet = LoggerDiscovery.localSubnetPrefix() ?? "?"
+    print("=== DeyeWidget --discover ===")
+    print("subnet \(subnet)0/24  serial \(serial)  MAC \(mac)")
+    if let r = LoggerDiscovery.discover(loggerMAC: mac, serial: serial, slave: slave) {
+        print("FOUND  ip=\(r.ip)  mac=\(r.mac ?? "-")  via \(r.method)")
+        return 0
+    }
+    print("not found")
+    return 1
+}
+
 // MARK: - History CLI (--history / --gaps), DB-only, no socket
 
 /// Parse a duration like "24h", "5d", "90m", "45s" into seconds. Bare number = seconds.
@@ -235,6 +260,9 @@ if CommandLine.arguments.contains("--menucheck") {
 }
 if CommandLine.arguments.contains("--dump") {
     exit(runDump())
+}
+if CommandLine.arguments.contains("--discover") {
+    exit(runDiscover())
 }
 if let i = CommandLine.arguments.firstIndex(of: "--history") {
     exit(runHistory(CommandLine.arguments.count > i + 1 ? CommandLine.arguments[i + 1] : "60m"))

@@ -66,6 +66,7 @@ final class Settings: ObservableObject {
         static let host = "host"
         static let port = "port"
         static let loggerSerial = "loggerSerial"
+        static let loggerMAC = "loggerMAC"
         static let slaveId = "slaveId"
         static let pollInterval = "pollInterval"
         static let sizePreset = "sizePreset"    // legacy (migrated to scale)
@@ -85,6 +86,12 @@ final class Settings: ObservableObject {
     }
     @Published var loggerSerial: UInt32 {
         didSet { defaults.set(Int(loggerSerial), forKey: Keys.loggerSerial) }
+    }
+    /// Logger's WiFi-stick MAC, used to recognise it in a Solarman broadcast
+    /// reply when its IP changes. Auto-populated on any successful broadcast
+    /// discovery; seeded with the known stick's MAC.
+    @Published var loggerMAC: String {
+        didSet { defaults.set(loggerMAC, forKey: Keys.loggerMAC) }
     }
     @Published var slaveId: UInt8 {
         didSet { defaults.set(Int(slaveId), forKey: Keys.slaveId) }
@@ -122,6 +129,7 @@ final class Settings: ObservableObject {
         port = p > 0 ? UInt16(p) : 8899
         let s = defaults.object(forKey: Keys.loggerSerial) as? Int
         loggerSerial = s.map { UInt32($0) } ?? 0
+        loggerMAC = defaults.string(forKey: Keys.loggerMAC) ?? "74:E9:D8:75:37:D6"
         let sl = defaults.integer(forKey: Keys.slaveId)
         slaveId = sl > 0 ? UInt8(sl) : 1
         let pi = defaults.double(forKey: Keys.pollInterval)
@@ -158,6 +166,7 @@ final class Settings: ObservableObject {
 
         std.set(legacyHost, forKey: Keys.host)
         if let s = legacy.object(forKey: Keys.loggerSerial) as? Int { std.set(s, forKey: Keys.loggerSerial) }
+        if let mac = legacy.string(forKey: Keys.loggerMAC) { std.set(mac, forKey: Keys.loggerMAC) }
         let p = legacy.integer(forKey: Keys.port); if p > 0 { std.set(p, forKey: Keys.port) }
         let sl = legacy.integer(forKey: Keys.slaveId); if sl > 0 { std.set(sl, forKey: Keys.slaveId) }
         let pi = legacy.double(forKey: Keys.pollInterval); if pi > 0 { std.set(pi, forKey: Keys.pollInterval) }

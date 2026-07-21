@@ -149,6 +149,16 @@ final class DataPoller: ObservableObject {
     private var migration = BatteryMigration()
     private let maxHistory = 720
 
+    // Auto-rediscovery: after this many consecutive failed polls (~60s at 5s)
+    // the logger is presumed to have moved; kick off a LAN discovery, but no more
+    // often than `discoveryBackoff` seconds apart (60s first, then 5 min).
+    private let failuresBeforeDiscovery = 12
+    private var consecutiveFailures = 0
+    private var lastDiscoveryAttempt: Date?
+    private var discoveryBackoff: TimeInterval = 60
+    private var discovering = false
+    private let discoveryQueue = DispatchQueue(label: "com.deyewidget.discovery")
+
     private let engine: PollEngine
     private var task: Task<Void, Never>?
     private let settings: Settings
@@ -217,13 +227,49 @@ final class DataPoller: ObservableObject {
             self.connected = true
             self.lastUpdate = Date()
             self.lastError = nil
+            consecutiveFailures = 0
             appendHistory(d)
             store?.record(d)
             updateTiers(d)
         case .failure(let err):
             self.connected = false
             self.lastError = String(describing: err)
+            consecutiveFailures += 1
+            maybeRediscover()
         }
+    }
+
+    /// Kick off a LAN rediscovery when polling has been failing long enough and
+    /// we're past the backoff window. Runs off the poll loop; never blocks it.
+    private func maybeRediscover() {
+        guard settings.isConfigured, !discovering,
+              consecutiveFailures >= failuresBeforeDiscovery else { return }
+        if let last = lastDiscoveryAttempt, Date().timeIntervalSince(last) < discoveryBackoff { return }
+
+        discovering = true
+        lastDiscoveryAttempt = Date()
+        let mac = settings.loggerMAC
+        let serial = settings.loggerSerial
+        let slave = settings.slaveId
+        discoveryQueue.async { [weak self] in
+            let result = LoggerDiscovery.discover(loggerMAC: mac, serial: serial, slave: slave)
+            Task { @MainActor [weak self] in self?.applyDiscovery(result) }
+        }
+    }
+
+    private func applyDiscovery(_ r: DiscoveryResult?) {
+        discovering = false
+        guard let r else {
+            discoveryBackoff = 300   // nothing found; back off to 5 min
+            FileHandle.standardError.write("[discovery] logger not found; backing off 5 min\n".data(using: .utf8)!)
+            return
+        }
+        FileHandle.standardError.write("[discovery] found logger at \(r.ip) via \(r.method)\n".data(using: .utf8)!)
+        if settings.host != r.ip { settings.host = r.ip }
+        if let mac = r.mac, !mac.isEmpty { settings.loggerMAC = mac }
+        consecutiveFailures = 0
+        discoveryBackoff = 60
+        refreshNow()   // resume polling immediately against the new host
     }
 
     private func appendHistory(_ d: InverterData) {
