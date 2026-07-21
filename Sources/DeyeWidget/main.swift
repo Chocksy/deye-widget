@@ -33,24 +33,24 @@ func runPinTest() -> Int32 {
     MainActor.assumeIsolated {
         print("=== Pin placement self-test ===")
         var pass = true
-        // Wokyis: frame (1600,-540 960x540), window 510x300.
-        let sf = NSRect(x: 1600, y: -540, width: 960, height: 540)
-        let w = NSSize(width: 510, height: 300)
+        // Generic secondary-display fixture (origin offset + non-zero position).
+        let sf = NSRect(x: 1440, y: 0, width: 800, height: 600)
+        let w = NSSize(width: 400, height: 300)
         func check(_ label: String, _ got: NSPoint, _ want: NSPoint) {
             let ok = abs(got.x - want.x) < 0.5 && abs(got.y - want.y) < 0.5
             pass = pass && ok
             print("  \(label.padding(toLength: 26, withPad: " ", startingAt: 0)) got=(\(Int(got.x)),\(Int(got.y))) want=(\(Int(want.x)),\(Int(want.y))) \(ok ? "PASS" : "FAIL")")
         }
-        // flush-right centered (relX=1, relY=0.5): x = 1600+450=2050, y = -540+120=-420
-        check("flush-right centered", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: w, relX: 1.0, relY: 0.5), NSPoint(x: 2050, y: -420))
+        // flush-right centered (relX=1, relY=0.5): x = 1440+400=1840, y = 0+150=150
+        check("flush-right centered", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: w, relX: 1.0, relY: 0.5), NSPoint(x: 1840, y: 150))
         // flush bottom-left (0,0)
-        check("flush bottom-left", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: w, relX: 0, relY: 0), NSPoint(x: 1600, y: -540))
-        // flush top-right (1,1): x=2050, y=-540+240=-300
-        check("flush top-right", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: w, relX: 1, relY: 1), NSPoint(x: 2050, y: -300))
+        check("flush bottom-left", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: w, relX: 0, relY: 0), NSPoint(x: 1440, y: 0))
+        // flush top-right (1,1): x=1840, y=0+300=300
+        check("flush top-right", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: w, relX: 1, relY: 1), NSPoint(x: 1840, y: 300))
         // out-of-range clamps to [0,1]
-        check("clamp rel > 1", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: w, relX: 5, relY: -2), NSPoint(x: 2050, y: -540))
+        check("clamp rel > 1", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: w, relX: 5, relY: -2), NSPoint(x: 1840, y: 0))
         // window larger than screen -> origin at screen origin (no negative offset)
-        check("oversize window", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: NSSize(width: 2000, height: 800), relX: 0.5, relY: 0.5), NSPoint(x: 1600, y: -540))
+        check("oversize window", WidgetWindow.desiredOrigin(screenFrame: sf, windowSize: NSSize(width: 2000, height: 800), relX: 0.5, relY: 0.5), NSPoint(x: 1440, y: 0))
         print(pass ? "ALL PASS" : "FAIL")
         return pass ? 0 : 1
     }

@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:-1.2.0}"
+VERSION="${1:-1.3.0}"
 APP="DeyeWidget.app"
 DMG="DeyeWidget-$VERSION.dmg"
 

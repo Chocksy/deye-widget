@@ -152,7 +152,9 @@ final class Settings: ObservableObject {
         port = p > 0 ? UInt16(p) : 8899
         let s = defaults.object(forKey: Keys.loggerSerial) as? Int
         loggerSerial = s.map { UInt32($0) } ?? 0
-        loggerMAC = defaults.string(forKey: Keys.loggerMAC) ?? "74:E9:D8:75:37:D6"
+        // Empty = unknown; auto-populated on the first successful broadcast
+        // discovery (see LoggerDiscovery / DataPoller.applyDiscovery).
+        loggerMAC = defaults.string(forKey: Keys.loggerMAC) ?? ""
         let sl = defaults.integer(forKey: Keys.slaveId)
         slaveId = sl > 0 ? UInt8(sl) : 1
         let pi = defaults.double(forKey: Keys.pollInterval)
