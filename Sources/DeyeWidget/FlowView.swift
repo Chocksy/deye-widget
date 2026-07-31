@@ -46,6 +46,38 @@ private struct Node {
     let socPrimary: Bool    // battery renders SOC as the bold primary
 }
 
+// MARK: - Glow sprite
+
+/// Pre-rendered glowing-dot sprite (solid dot + baked gaussian glow), cached
+/// per color/size/scale. Replaces the per-dot ctx.drawLayer + .shadow filter:
+/// each of those rented a RenderBox offscreen surface per dot per frame at
+/// 30 fps, arming ~1.8k dispatch eviction timers/s. Stamping a cached image is
+/// one textured quad -- no offscreen pass, no filter, no timer.
+@MainActor
+private enum GlowSprite {
+    private struct Key: Hashable {
+        let color: Color; let r: CGFloat; let blur: CGFloat; let scale: CGFloat
+    }
+    private static var cache: [Key: NSImage] = [:]
+
+    /// Square sprite, `2r + 4*blur` points on a side.
+    static func image(color: Color, r: CGFloat, blur: CGFloat, displayScale: CGFloat) -> NSImage {
+        let key = Key(color: color, r: r, blur: blur, scale: displayScale)
+        if let hit = cache[key] { return hit }
+        // Same composite as the old filter: blurred copy behind a solid dot.
+        let renderer = ImageRenderer(content:
+            Circle().fill(color)
+                .frame(width: r * 2, height: r * 2)
+                .shadow(color: color.opacity(0.9), radius: blur)
+                .padding(blur * 2)          // room for the gaussian tail
+        )
+        renderer.scale = displayScale
+        let img = renderer.nsImage ?? NSImage()
+        cache[key] = img
+        return img
+    }
+}
+
 // MARK: - FlowView
 
 struct FlowView: View {
@@ -56,6 +88,14 @@ struct FlowView: View {
     /// Uniform size multiplier. All point sizes are parameterized (not
     /// rasterized via scaleEffect) so text stays crisp at every preset.
     var scale: CGFloat = 1.0
+
+    // ponytail: single Bool flipped once in onAppear; Core Animation interpolates
+    // the repeatForever breathe on the render server. Costs no per-frame CPU,
+    // unlike re-evaluating the view body from a TimelineView.
+    @State private var breathing = false
+
+    /// Backing-store scale the glow sprites are rasterized at (2 on Retina).
+    @Environment(\.displayScale) private var displayScale
 
     // Base design: 440x400 flow, +330 wide chart pane; Dashboard is 620 wide.
     static let flowWidth: CGFloat = 440
@@ -329,25 +369,42 @@ struct FlowView: View {
             let rightCX = w - outer - colW / 2
             let center = CGPoint(x: w / 2, y: h / 2)
             let place = dashPlacement(w: w, h: h, colW: colW, leftCX: leftCX, rightCX: rightCX)
+            // Snapshot everything the 30 fps Canvas needs here, in the view body:
+            // this runs on data/layout changes only, so the frame closure never
+            // touches the poller or reformats a string.
+            let nodes = Dictionary(uniqueKeysWithValues: NodeKind.allCases.map { ($0, dashNode($0)) })
+            let activeSet = poller.activeNodes
+            let sprites = nodes.mapValues {
+                GlowSprite.image(color: $0.semantic, r: sc(2.5), blur: sc(3),
+                                 displayScale: displayScale)
+            }
+            let dots = spineDotSpecs(place: place, nodes: nodes, activeSet: activeSet,
+                                     sprites: sprites, center: center, colW: colW)
 
             ZStack {
-                TimelineView(.animation) { tl in
-                    Canvas { ctx, _ in
-                        for k in NodeKind.allCases {
-                            guard let p = place[k] else { continue }
-                            let onLeft = p.cx < center.x
-                            let edge = CGPoint(x: onLeft ? p.cx + colW / 2 : p.cx - colW / 2, y: p.cy)
-                            drawSpine(ctx: ctx, cardEdge: edge, center: center,
-                                      node: dashNode(k), tier: p.tier, date: tl.date)
-                        }
+                // Static spines: geometry/width/color change only with poller data
+                // or layout, so they redraw on body evaluation (~per poll), not per
+                // animation frame.
+                Canvas { ctx, _ in
+                    for k in NodeKind.allCases {
+                        guard let p = place[k], let n = nodes[k] else { continue }
+                        let onLeft = p.cx < center.x
+                        let edge = CGPoint(x: onLeft ? p.cx + colW / 2 : p.cx - colW / 2, y: p.cy)
+                        drawSpineStroke(ctx: ctx, cardEdge: edge, center: center,
+                                        node: n, tier: p.tier, isActive: activeSet.contains(k))
                     }
                 }
+                // ponytail: the dots are CALayers animated by the render server, so
+                // the app does no per-frame work. No active spine -> empty specs ->
+                // no layers, nothing animating.
+                DotLayerView(specs: dots, displayScale: displayScale)
+                    .allowsHitTesting(false)
 
                 inverterNode.position(center)
 
                 ForEach(NodeKind.allCases, id: \.self) { k in
-                    if let p = place[k] {
-                        tierView(dashNode(k), tier: p.tier)
+                    if let p = place[k], let n = nodes[k] {
+                        tierView(n, tier: p.tier)
                             .frame(width: colW, height: p.hgt)
                             .position(x: p.cx, y: p.cy)
                     }
@@ -446,45 +503,79 @@ struct FlowView: View {
         )
     }
 
-    /// Full glowing spine from a card edge to the inverter; |W|-scaled width + dots.
-    private func drawSpine(ctx: GraphicsContext, cardEdge: CGPoint, center: CGPoint,
-                           node: DashNode, tier: Tier, date: Date) {
+    /// Bézier control points of the spine running from a card edge to the
+    /// inverter. Shared by the static stroke and the animated dots so both halves
+    /// trace exactly the same curve.
+    private func spineGeometry(cardEdge: CGPoint, center: CGPoint)
+        -> (s: CGPoint, e: CGPoint, c1: CGPoint, c2: CGPoint) {
         let s = cardEdge
         let e = edgePoint(from: center, to: cardEdge, radius: invR)
         let radial = unit(dx: cardEdge.x - center.x, dy: cardEdge.y - center.y)
         let span = hypot(e.x - s.x, e.y - s.y)
         let c1 = CGPoint(x: s.x + (e.x - s.x) * 0.5, y: s.y)
         let c2 = CGPoint(x: e.x + radial.dx * span * 0.4, y: e.y + radial.dy * span * 0.4)
+        return (s, e, c1, c2)
+    }
 
-        let active = poller.activeNodes.contains(node.kind) && tier != .idle
+    /// Static half of the spine: the |W|-scaled glowing stroke.
+    private func drawSpineStroke(ctx: GraphicsContext, cardEdge: CGPoint, center: CGPoint,
+                                 node: DashNode, tier: Tier, isActive: Bool) {
+        let g = spineGeometry(cardEdge: cardEdge, center: center)
+
+        let active = isActive && tier != .idle
         let color = active ? node.semantic : Semantic.idle
         let frac = min(1.0, node.magnitude / 3000.0)
         let width = active ? (1.5 + 2.5 * frac) : 1.0
 
         var path = Path()
-        path.move(to: s)
-        path.addCurve(to: e, control1: c1, control2: c2)
+        path.move(to: g.s)
+        path.addCurve(to: g.e, control1: g.c1, control2: g.c2)
         ctx.stroke(path,
                    with: .color(active ? color.opacity(0.65) : Color.white.opacity(0.07)),
                    style: StrokeStyle(lineWidth: sc(width), lineCap: .round))
+    }
 
-        guard active else { return }
-
-        let dotCount = max(1, Int((1 + 3 * frac).rounded()))
-        let period = 2.5 - 1.6 * frac
-        let r = sc(2.5)
-        let base = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
-        for i in 0..<dotCount {
-            let phase = (base + Double(i) / Double(dotCount)).truncatingRemainder(dividingBy: 1.0)
-            let travel = 0.08 + phase * 0.84
-            let u = node.feeding ? travel : (1.0 - travel)   // feeding = node -> inverter
-            let pt = cubicPoint(CGFloat(u), s, c1, c2, e)
-            let dot = Path(ellipseIn: CGRect(x: pt.x - r, y: pt.y - r, width: r * 2, height: r * 2))
-            ctx.drawLayer { layer in
-                layer.addFilter(.shadow(color: color.opacity(0.9), radius: sc(3)))
-                layer.fill(dot, with: .color(color))
-            }
+    /// Animated half of the spine, handed to Core Animation instead of drawn:
+    /// one DotSpec per active spine. dotCount/period/travel-window formulas are
+    /// verbatim from the old per-frame loop.
+    private func spineDotSpecs(place: [NodeKind: Placement], nodes: [NodeKind: DashNode],
+                               activeSet: Set<NodeKind>, sprites: [NodeKind: NSImage],
+                               center: CGPoint, colW: CGFloat) -> [DotSpec] {
+        var out: [DotSpec] = []
+        for k in NodeKind.allCases {
+            guard let p = place[k], let n = nodes[k], let sprite = sprites[k] else { continue }
+            guard activeSet.contains(k), p.tier != .idle else { continue }
+            let onLeft = p.cx < center.x
+            let edge = CGPoint(x: onLeft ? p.cx + colW / 2 : p.cx - colW / 2, y: p.cy)
+            let g = spineGeometry(cardEdge: edge, center: center)
+            let frac = min(1.0, n.magnitude / 3000.0)
+            // travel = 0.08 + phase * 0.84; feeding = node -> inverter.
+            out.append(DotSpec(id: k.rawValue,
+                               points: travelSamples(g, from: 0.08, to: 0.92, reversed: !n.feeding),
+                               dotCount: max(1, Int((1 + 3 * frac).rounded())),
+                               period: 2.5 - 1.6 * frac,
+                               sprite: sprite, side: sprite.size.width))
         }
+        return out
+    }
+
+    /// Samples per travel window. 32 keeps the chord error of the polyline far
+    /// below a point, so linear interpolation between samples is invisible.
+    private static let dotSamples = 32
+
+    /// The curve at equal Bézier-parameter steps across the travel window. Equal
+    /// u steps are the point: Core Animation walks the values at a constant rate,
+    /// which reproduces the old parameter-speed pacing rather than arc-length.
+    private func travelSamples(_ g: (s: CGPoint, e: CGPoint, c1: CGPoint, c2: CGPoint),
+                               from u0: Double, to u1: Double, reversed: Bool) -> [CGPoint] {
+        let n = Self.dotSamples
+        var pts: [CGPoint] = []
+        pts.reserveCapacity(n)
+        for j in 0..<n {
+            let u = u0 + (u1 - u0) * Double(j) / Double(n - 1)
+            pts.append(cubicPoint(CGFloat(u), g.s, g.c1, g.c2, g.e))
+        }
+        return reversed ? pts.reversed() : pts
     }
 
     private var dashboardBottomBar: some View {
@@ -586,18 +677,28 @@ struct FlowView: View {
             let d = poller.data
             let positions = [pvPos, miPos, gridPos, battPos, housePos, evPos]
             let specs = [pvNode(d), miNode(d), gridNode(d), battNode(d), houseNode(d), evNode(d)]
+            let sprites = specs.map {
+                GlowSprite.image(color: $0.color, r: sc(2.5), blur: sc(3),
+                                 displayScale: displayScale)
+            }
+            let dots = connectionDotSpecs(positions: positions, specs: specs,
+                                          sprites: sprites, center: center)
 
             ZStack {
-                // Connectors (curves + traveling dots) drawn in one Canvas so
-                // everything shares the flow-area coordinate space exactly.
-                TimelineView(.animation) { timeline in
-                    Canvas { ctx, _ in
-                        for i in 0..<6 {
-                            drawConnection(ctx: ctx, node: positions[i], center: center,
-                                           spec: specs[i], date: timeline.date)
-                        }
+                // Static connector curves: they change only with poller data or
+                // layout, so they redraw on body evaluation, not per animation
+                // frame. Same coordinate space as the dot canvas below.
+                Canvas { ctx, _ in
+                    for i in 0..<6 {
+                        drawConnectionStroke(ctx: ctx, node: positions[i], center: center,
+                                             spec: specs[i])
                     }
                 }
+                // ponytail: the dots are CALayers animated by the render server, so
+                // the app does no per-frame work. No active connector -> empty specs
+                // -> no layers, nothing animating.
+                DotLayerView(specs: dots, displayScale: displayScale)
+                    .allowsHitTesting(false)
 
                 inverterNode.position(center)
 
@@ -615,28 +716,26 @@ struct FlowView: View {
     }
 
     private var inverterNode: some View {
-        TimelineView(.animation) { timeline in
-            let active = anyActive
-            let breath = active ? breathScale(timeline.date) : 1.0
-            ZStack {
-                Circle()
-                    .fill(.ultraThinMaterial)
-                    .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 1))
-                    .frame(width: invR * 2, height: invR * 2)
-                    .shadow(color: .black.opacity(0.35), radius: sc(6), y: sc(2))
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: sc(24), weight: .bold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(Color.yellow)
-                    .shadow(color: active ? .yellow.opacity(0.5) : .clear, radius: sc(6))
-            }
-            .scaleEffect(breath)
+        let active = anyActive
+        // The material + shadows below are static. Keeping them out of a
+        // per-frame TimelineView body stops SwiftUI recycling their backing
+        // IOSurfaces 60x/s (RenderBox SurfacePool churn).
+        return ZStack {
+            Circle()
+                .fill(.ultraThinMaterial)
+                .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 1))
+                .frame(width: invR * 2, height: invR * 2)
+                .shadow(color: .black.opacity(0.35), radius: sc(6), y: sc(2))
+            Image(systemName: "bolt.fill")
+                .font(.system(size: sc(24), weight: .bold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(Color.yellow)
+                .shadow(color: active ? .yellow.opacity(0.5) : .clear, radius: sc(6))
         }
-    }
-
-    private func breathScale(_ date: Date) -> CGFloat {
-        let t = date.timeIntervalSinceReferenceDate
-        return 1.0 + 0.03 * CGFloat((sin(t * 2.0) + 1) / 2)
+        // Was 1.0 + 0.03 * (sin(2t)+1)/2 -> period 2pi/2 = 3.14 s, half-cycle 1.57 s.
+        .scaleEffect(active && breathing ? 1.03 : 1.0)
+        .animation(.easeInOut(duration: 1.57).repeatForever(autoreverses: true), value: breathing)
+        .onAppear { breathing = true }
     }
 
     // MARK: Node specs
@@ -748,8 +847,11 @@ struct FlowView: View {
 
     // MARK: Connectors (Canvas-drawn)
 
-    private func drawConnection(ctx: GraphicsContext, node: CGPoint, center: CGPoint,
-                                spec: Node, date: Date) {
+    /// Bézier control points of the connector running from a node to the
+    /// inverter. Shared by the static stroke and the animated dots so both halves
+    /// trace exactly the same curve.
+    private func connectionGeometry(node: CGPoint, center: CGPoint)
+        -> (s: CGPoint, e: CGPoint, c1: CGPoint, c2: CGPoint) {
         // Curve always drawn node -> inverter for geometric stability.
         let s = edgePoint(from: node, to: center, radius: nodeR)
         let e = edgePoint(from: center, to: node, radius: invR)
@@ -762,34 +864,42 @@ struct FlowView: View {
         let c1 = CGPoint(x: s.x, y: s.y + (e.y - s.y) * 0.5)         // vertical leave
         let c2 = CGPoint(x: e.x + radial.dx * handle,               // radial ease-in
                          y: e.y + radial.dy * handle)
+        return (s, e, c1, c2)
+    }
 
+    /// Static half of the connector: the curve itself.
+    private func drawConnectionStroke(ctx: GraphicsContext, node: CGPoint, center: CGPoint,
+                                      spec: Node) {
+        let g = connectionGeometry(node: node, center: center)
         let active = spec.active && spec.dir != .none
 
         var path = Path()
-        path.move(to: s)
-        path.addCurve(to: e, control1: c1, control2: c2)
+        path.move(to: g.s)
+        path.addCurve(to: g.e, control1: g.c1, control2: g.c2)
         ctx.stroke(
             path,
             with: .color(active ? spec.color.opacity(0.6) : Color.white.opacity(0.08)),
             style: StrokeStyle(lineWidth: active ? sc(2) : sc(1), lineCap: .round)
         )
+    }
 
-        guard active else { return }
-
-        // ~2 s per traversal; 3 evenly phased dots on the visible mid-path.
-        let r = sc(2.5)
-        let base = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.0) / 2.0
-        for i in 0..<3 {
-            let phase = (base + Double(i) / 3.0).truncatingRemainder(dividingBy: 1.0)
-            let travel = 0.1 + phase * 0.8
-            let u = spec.dir == .toInverter ? travel : (1.0 - travel)
-            let pt = cubicPoint(CGFloat(u), s, c1, c2, e)
-            let dot = Path(ellipseIn: CGRect(x: pt.x - r, y: pt.y - r, width: r * 2, height: r * 2))
-            ctx.drawLayer { layer in
-                layer.addFilter(.shadow(color: spec.color.opacity(0.9), radius: sc(3)))
-                layer.fill(dot, with: .color(spec.color))
-            }
+    /// Animated half of the connector, handed to Core Animation instead of drawn.
+    /// ~2 s per traversal; 3 evenly phased dots on the visible mid-path.
+    private func connectionDotSpecs(positions: [CGPoint], specs: [Node],
+                                    sprites: [NSImage], center: CGPoint) -> [DotSpec] {
+        var out: [DotSpec] = []
+        for i in 0..<6 {
+            let spec = specs[i]
+            guard spec.active, spec.dir != .none else { continue }
+            let g = connectionGeometry(node: positions[i], center: center)
+            // travel = 0.1 + phase * 0.8, run backwards unless the flow is inbound.
+            out.append(DotSpec(id: "conn-\(i)",
+                               points: travelSamples(g, from: 0.1, to: 0.9,
+                                                     reversed: spec.dir != .toInverter),
+                               dotCount: 3, period: 2.0,
+                               sprite: sprites[i], side: sprites[i].size.width))
         }
+        return out
     }
 
     private func edgePoint(from: CGPoint, to: CGPoint, radius: CGFloat) -> CGPoint {
@@ -1021,15 +1131,18 @@ struct BreathingDot: View {
     let connected: Bool
     var scale: CGFloat = 1.0
 
+    @State private var pulsing = false
+
     var body: some View {
-        TimelineView(.animation) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
-            let pulse = connected ? (0.55 + 0.45 * ((sin(t * 2.2) + 1) / 2)) : 1.0
-            Circle()
-                .fill(connected ? Color.green : Color.red)
-                .frame(width: 9 * scale, height: 9 * scale)
-                .shadow(color: (connected ? Color.green : Color.red).opacity(pulse), radius: 4 * scale)
-                .opacity(connected ? (0.7 + 0.3 * pulse) : 1.0)
-        }
+        // The shadow is composited before .opacity, so animating opacity alone
+        // pulses the glow too -- one CA-interpolated property, no per-frame body.
+        // Was sin(t * 2.2) -> period 2pi/2.2 = 2.86 s, half-cycle 1.43 s.
+        Circle()
+            .fill(connected ? Color.green : Color.red)
+            .frame(width: 9 * scale, height: 9 * scale)
+            .shadow(color: (connected ? Color.green : Color.red).opacity(0.9), radius: 4 * scale)
+            .opacity(connected ? (pulsing ? 1.0 : 0.7) : 1.0)
+            .animation(.easeInOut(duration: 1.43).repeatForever(autoreverses: true), value: pulsing)
+            .onAppear { pulsing = true }
     }
 }
