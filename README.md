@@ -45,15 +45,7 @@ The app binary is at `.build/release/DeyeWidget`.
 
 **From a release (recommended):** download `DeyeWidget-x.y.z.dmg` from the [Releases](https://github.com/Chocksy/deye-widget/releases) page, open it, and drag **DeyeWidget** onto the **Applications** shortcut.
 
-The app is **ad-hoc signed and not notarized**, so on first launch Gatekeeper will block it. Either:
-
-- Right-click **DeyeWidget.app** in Applications → **Open** → **Open** in the dialog (only needed once), or
-- clear the quarantine flag from the terminal:
-
-  ```sh
-  xattr -cr /Applications/DeyeWidget.app
-  open /Applications/DeyeWidget.app
-  ```
+Releases from v1.5.1 on are signed with a Developer ID and notarized by Apple, so the app opens with no Gatekeeper warning. Older releases were ad-hoc signed; for those, run `xattr -cr /Applications/DeyeWidget.app` once.
 
 Then set your logger **host** and **serial** via the menu-bar item → **Settings…** (see [Configuration](#configuration)). It runs as a menu-bar accessory with no Dock icon.
 
