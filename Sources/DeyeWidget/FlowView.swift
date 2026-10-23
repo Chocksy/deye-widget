@@ -44,6 +44,7 @@ private struct Node {
     let dir: FlowDir
     let active: Bool
     let socPrimary: Bool    // battery renders SOC as the bold primary
+    var tertiary: String? = nil  // battery time-left line (Flow D1)
 }
 
 // MARK: - Glow sprite
@@ -102,6 +103,10 @@ struct FlowView: View {
     static let chartWidth: CGFloat = 330
     static let dashboardWidth: CGFloat = 680
     static let baseHeight: CGFloat = 400
+
+    /// `--etashots` only: ImageRenderer can't draw the dot NSView and paints a
+    /// placeholder over the layout, so offscreen renders skip it.
+    static var offscreen = false
 
     private var nodeR: CGFloat { 25 * scale }   // node circle radius
     private var invR: CGFloat { 30 * scale }    // inverter circle radius
@@ -397,8 +402,10 @@ struct FlowView: View {
                 // ponytail: the dots are CALayers animated by the render server, so
                 // the app does no per-frame work. No active spine -> empty specs ->
                 // no layers, nothing animating.
-                DotLayerView(specs: dots, displayScale: displayScale)
-                    .allowsHitTesting(false)
+                if !Self.offscreen {
+                    DotLayerView(specs: dots, displayScale: displayScale)
+                        .allowsHitTesting(false)
+                }
 
                 inverterNode.position(center)
 
@@ -433,6 +440,15 @@ struct FlowView: View {
                 .tracking(sc(0.6))
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
+            // E2 on the Dashboard: at the floor the battery is idle, so say why here.
+            if n.kind == .battery, case .reserve = poller.batteryETA, let t = flowETALine {
+                Text(t)
+                    .font(.system(size: sc(10), weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
             Text(n.kind == .ev ? "waiting" : (n.unit.isEmpty ? n.big : "\(n.big) \(n.unit)"))
                 .font(.system(size: sc(11), weight: .semibold, design: .rounded))
                 .monospacedDigit()
@@ -482,12 +498,35 @@ struct FlowView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                Text(n.secondary)
-                    .font(.system(size: sc(11), weight: .regular, design: .rounded))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+                if n.kind == .battery {
+                    socBar(tint: active ? tint : Semantic.idle)
+                }
+                if n.kind == .battery, let e = etaText(hero: hero) {
+                    (Text(e.lead).fontWeight(.semibold).foregroundColor(.primary)
+                     + Text(e.tail.map { " · \($0)" } ?? "").foregroundColor(.secondary))
+                        .font(.system(size: sc(11), weight: .regular, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    if let pill = e.pill {
+                        Text(pill.text)
+                            .font(.system(size: sc(9.5), weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(pill.color)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .padding(.horizontal, sc(6))
+                            .padding(.vertical, sc(1.5))
+                            .background(Capsule().fill(pill.color.opacity(0.16)))
+                    }
+                } else {
+                    Text(n.secondary)
+                        .font(.system(size: sc(11), weight: .regular, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -501,6 +540,82 @@ struct FlowView: View {
                 .overlay(RoundedRectangle(cornerRadius: sc(16), style: .continuous)
                     .stroke(tint.opacity(active ? (hero ? 0.55 : 0.35) : 0.12), lineWidth: hero ? 1.5 : 1))
         )
+    }
+
+    /// C2: SOC bar under the battery value. The part below the floor (the
+    /// inverter's reserve) is dimmed, with a thin white tick at the floor.
+    private func socBar(tint: Color) -> some View {
+        let soc = min(max(Double(poller.data.soc) / 100, 0), 1)
+        let floor = min(max(settings.batteryFloor / 100, 0), 1)
+        return Canvas { ctx, size in
+            let r = size.height / 2
+            let full = CGRect(origin: .zero, size: size)
+            ctx.fill(Path(roundedRect: full, cornerRadius: r), with: .color(.white.opacity(0.10)))
+            var fill = ctx
+            fill.clip(to: Path(roundedRect: full, cornerRadius: r))
+            let low = min(soc, floor) * size.width
+            fill.fill(Path(CGRect(x: 0, y: 0, width: low, height: size.height)), with: .color(tint.opacity(0.35)))
+            if soc > floor {
+                fill.fill(Path(CGRect(x: low, y: 0, width: (soc - floor) * size.width, height: size.height)),
+                          with: .color(tint))
+            }
+            let x = floor * size.width
+            fill.fill(Path(CGRect(x: x - 0.75, y: 0, width: 1.5, height: size.height)), with: .color(.white.opacity(0.9)))
+        }
+        .frame(height: sc(6))
+        .padding(.vertical, sc(2))
+    }
+
+    private struct ETAText {
+        let lead: String
+        let tail: String?
+        let pill: (text: String, color: Color)?
+    }
+
+    private func kw(_ w: Int) -> String {
+        abs(w) >= 1000 ? String(format: "%.1f kW", Double(abs(w)) / 1000) : "\(abs(w)) W"
+    }
+
+    /// Dashboard battery-card text for the current estimate; nil → old subtitle.
+    /// Hero cards get the B3 pill; smaller cards fold the solar time inline.
+    private func etaText(hero: Bool) -> ETAText? {
+        let hm = { (d: Date) in BatteryEstimate.clock.string(from: d) }
+        switch poller.batteryETA {
+        case .none:
+            return nil
+        case .charging(let fullBy):
+            return ETAText(lead: "full by \(hm(fullBy))", tail: kw(poller.data.batteryPower), pill: nil)
+        case .reserve(let since):
+            return ETAText(lead: since.map { "on grid since \(hm($0))" } ?? "on grid", tail: nil, pill: nil)
+        case .discharging(let until, let solarAt, let learning):
+            let sun = solarAt.map { "☀ ~\(hm($0))" }
+            let lead = until.map { "until \(hm($0))" } ?? (solarAt == nil ? "lasts 36 h+" : "lasts until solar")
+            if learning {
+                return hero ? ETAText(lead: lead, tail: sun, pill: ("learning…", Semantic.idle))
+                            : ETAText(lead: lead, tail: "learning", pill: nil)
+            }
+            guard hero, let solarAt, let sun else { return ETAText(lead: lead, tail: sun, pill: nil) }
+            guard let until else {   // lasts: green pill, same shape as the grid one
+                return ETAText(lead: lead, tail: nil, pill: ("\(sun) · no grid", Palette.batteryCharge))
+            }
+            let gap = solarAt.timeIntervalSince(until)
+            let gapText = gap >= 3600 ? String(format: "%.1f h grid", gap / 3600) : "\(Int(gap / 60)) min grid"
+            return ETAText(lead: lead, tail: nil, pill: ("\(sun) · \(gapText)", Palette.batteryDischarge))
+        }
+    }
+
+    /// Flow-mode third line under the battery node (D1); nil hides it. Reserve
+    /// says "grid since" (not "on grid since"): the battery node sits ~50 pt from
+    /// the left edge, and the longer form ran past it at Small scale.
+    private var flowETALine: String? {
+        let hm = { (d: Date) in BatteryEstimate.clock.string(from: d) }
+        switch poller.batteryETA {
+        case .none: return nil
+        case .charging(let fullBy): return "full by \(hm(fullBy))"
+        case .reserve(let since): return since.map { "grid since \(hm($0))" } ?? "on grid"
+        case .discharging(let until, let solarAt, _):
+            return until.map { "until \(hm($0))" } ?? (solarAt == nil ? "lasts 36 h+" : "lasts until solar")
+        }
     }
 
     /// Bézier control points of the spine running from a card edge to the
@@ -662,7 +777,9 @@ struct FlowView: View {
             // Circle centers. Top nodes near the top; bottom nodes leave room
             // beneath for two label lines above the stats strip.
             let topY = nodeR + sc(4)
-            let botY = h - nodeR - sc(42)
+            // The battery's time-left line (D1) needs ~one more label row.
+            let etaLift = flowETALine == nil ? 0 : sc(14)
+            let botY = h - nodeR - sc(42) - etaLift
             let leftX = nodeR + sc(12)
             let rightX = w - nodeR - sc(12)
             let midX = w / 2
@@ -697,8 +814,10 @@ struct FlowView: View {
                 // ponytail: the dots are CALayers animated by the render server, so
                 // the app does no per-frame work. No active connector -> empty specs
                 // -> no layers, nothing animating.
-                DotLayerView(specs: dots, displayScale: displayScale)
-                    .allowsHitTesting(false)
+                if !Self.offscreen {
+                    DotLayerView(specs: dots, displayScale: displayScale)
+                        .allowsHitTesting(false)
+                }
 
                 inverterNode.position(center)
 
@@ -709,7 +828,8 @@ struct FlowView: View {
                 // Labels below each circle.
                 ForEach(0..<6, id: \.self) { i in
                     nodeLabels(specs[i])
-                        .position(x: positions[i].x, y: positions[i].y + nodeR + sc(20))
+                        .position(x: positions[i].x,
+                                  y: positions[i].y + nodeR + sc(20) + (specs[i].tertiary == nil ? 0 : sc(7)))
                 }
             }
         }
@@ -772,7 +892,7 @@ struct FlowView: View {
         return Node(symbol: batterySymbol(d.soc), name: "Battery", value: "\(d.soc)%",
                     secondary: Fmt.watts(d.batteryPower), color: color,
                     dir: discharging ? .toInverter : (charging ? .fromInverter : .none),
-                    active: charging || discharging, socPrimary: true)
+                    active: charging || discharging, socPrimary: true, tertiary: flowETALine)
     }
 
     private func houseNode(_ d: InverterData) -> Node {
@@ -830,6 +950,13 @@ struct FlowView: View {
                         .foregroundStyle(n.active ? .primary : .secondary)
                         .monospacedDigit()
                         .contentTransition(.numericText())
+                }
+                if let t = n.tertiary {
+                    Text(t)
+                        .font(.system(size: sc(10), weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                        .monospacedDigit()
+                        .lineLimit(1)
                 }
             } else {
                 Text(n.name)

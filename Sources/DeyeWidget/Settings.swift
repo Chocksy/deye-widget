@@ -77,6 +77,7 @@ final class Settings: ObservableObject {
         static let pinnedDisplayID = "pinnedDisplayID"
         static let pinnedRelX = "pinnedRelX"
         static let pinnedRelY = "pinnedRelY"
+        static let batteryFloor = "batteryFloor"
     }
 
     /// Allowed free-scale range (60%–130%).
@@ -139,6 +140,12 @@ final class Settings: ObservableObject {
     /// and logger serial (defaults are empty), the widget stays idle instead of
     /// hammering a wrong address.
     var isConfigured: Bool { !host.isEmpty && loggerSerial != 0 }
+
+    /// SOC % where discharge stops; mirrors the inverter's battery-low cutoff. No UI.
+    var batteryFloor: Double {
+        let v = defaults.double(forKey: Keys.batteryFloor)
+        return v > 0 ? v : 35
+    }
 
     private init() {
         // Bare-executable builds stored config under the "DeyeWidget" domain; the

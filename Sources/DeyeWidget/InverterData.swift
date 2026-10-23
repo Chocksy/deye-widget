@@ -145,6 +145,8 @@ final class DataPoller: ObservableObject {
     /// Whether the Battery card currently belongs in the right (consumers)
     /// column — true while consistently charging (see BatteryMigration).
     @Published var batteryOnRight = false
+    /// Battery time-left estimate, refreshed at most once a minute off main.
+    @Published var batteryETA: BatteryETA = .none
 
     private var migration = BatteryMigration()
     private let maxHistory = 720
@@ -164,11 +166,15 @@ final class DataPoller: ObservableObject {
     private let settings: Settings
     private let store: HistoryStore?
     private var pruneTimer: Timer?
+    private var lastETAAt: Date?
+    private let etaQueue = DispatchQueue(label: "com.deyewidget.eta", qos: .utility)
 
-    init(settings: Settings) {
+    /// `store` is injectable so `--etashots` can build a poller without opening
+    /// the history DB read/write.
+    init(settings: Settings, store: HistoryStore? = HistoryStore()) {
         self.settings = settings
         self.engine = PollEngine()
-        self.store = HistoryStore()
+        self.store = store
         // Seed the in-memory chart from disk so the Power Profile pane is full
         // immediately after a relaunch instead of drawing from an empty buffer.
         if let seed = store?.recentSamples(minutes: 60), !seed.isEmpty {
@@ -231,6 +237,7 @@ final class DataPoller: ObservableObject {
             appendHistory(d)
             store?.record(d)
             updateTiers(d)
+            refreshETA(d)
         case .failure(let err):
             self.connected = false
             self.lastError = String(describing: err)
@@ -270,6 +277,23 @@ final class DataPoller: ObservableObject {
         consecutiveFailures = 0
         discoveryBackoff = 60
         refreshNow()   // resume polling immediately against the new host
+    }
+
+    /// Recompute the battery estimate at most once per 60 s. The ~4-day DB read
+    /// (~70k rows) and the walk run on a utility queue; only the result hops to main.
+    private func refreshETA(_ d: InverterData) {
+        guard let store else { return }
+        let now = Date()
+        if let last = lastETAAt, now.timeIntervalSince(last) < 60 { return }
+        lastETAAt = now
+        let soc = d.soc, w = d.batteryPower, floor = settings.batteryFloor
+        etaQueue.async { [weak self] in
+            let rows = store.rows(sinceSecondsAgo: 4 * 86_400)
+            let eta = BatteryEstimate.compute(now: now, soc: soc, batteryW: w, rows: rows, floor: floor)
+            Task { @MainActor [weak self] in
+                if self?.batteryETA != eta { self?.batteryETA = eta }
+            }
+        }
     }
 
     private func appendHistory(_ d: InverterData) {

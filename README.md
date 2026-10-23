@@ -10,6 +10,7 @@ A native macOS desktop widget for a Deye / Sunsynk single-phase hybrid inverter 
 - **Living Dashboard** — card **size** tracks each source/sink's power (hero / compact / idle-row tiers with hysteresis), card **tint** encodes direction (spring-green when feeding the inverter, coral when drawing, teal when exporting to the grid), and idle nodes collapse to quiet rows. The **Battery card migrates columns** by charge direction. Glowing connector "spines" carry |W|-scaled width and traveling dots.
 - **Local only** — talks to the Solarman LSW logger on your LAN via the Solarman V5 protocol over TCP (Modbus RTU inside). No DeyeCloud, no internet round-trip. Polls every 5 s.
 - **Power Profile chart** — a rolling 60-minute history of House / MI / Battery / Grid watts plus battery SOC.
+- **Battery time left**: "until 07:37" while discharging, learned from your own last few nights (hourly load, battery size, the 35 % cutoff). Shows whether it lasts until solar starts, "full by 13:10" while charging, and "grid since 07:21" at the cutoff. Check it with `DeyeWidget --eta`.
 - **Menu bar item** — battery SOC at a glance (`⚡ 90%`), a live snapshot menu, and **Display** / **Size** submenus.
 - **Free scale** — a Settings slider from 60 %–130 % (with Small / Medium / Large shortcuts), so it fits any strip of screen. Everything scales crisply (parameterized, not rasterized).
 - **Grid frequency**, voltage, battery voltage and inverter temperature in the Dashboard footer.
